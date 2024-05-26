@@ -1,12 +1,15 @@
 import numpy as np
+import random
 
 
 class Grid:
     def __init__(self, mesh_size, phys_size):
-        assert (isinstance(phys_size, tuple) and len(phys_size) == 3
-               and all(map(lambda x: isinstance(x, float), phys_size)))
-        assert (isinstance(mesh_size, tuple) and len(mesh_size) == 3
-                and all(map(lambda x: isinstance(x, int) and x > 0, mesh_size)))
+        assert isinstance(phys_size, tuple) and len(phys_size) == 3
+        assert all(map(lambda x: isinstance(x, float), phys_size))
+
+        assert isinstance(mesh_size, tuple) and len(mesh_size) == 3
+        assert all(map(lambda x: isinstance(x, int) and x > 0, mesh_size))
+
         self.phys_size = phys_size  # (xsize, ysize, zsize), say in meters
         self.mesh_size = mesh_size  # (N_1, N_2, N_3), number of mesh points in each dimension
 
@@ -18,35 +21,21 @@ class Grid:
         self.k0 = np.divide(mesh_size, phys_size)
         self.one_over_dV = self.k0[0] * self.k0[1] * self.k0[2]
 
+        # initialize lapl_dft, which encodes how the
+        # discrete Fourier transform of a function relates to the original DFT
+        arr1 = -4 / (self.Dx ** 2) * (np.sin(np.pi / self.N1 * np.array(range(0, self.N1))) ** 2)
+        arr2 = -4 / (self.Dy ** 2) * (np.sin(np.pi / self.N2 * np.array(range(0, self.N2))) ** 2)
+        arr3 = -4 / (self.Dz ** 2) * (np.sin(np.pi / self.N3 * np.array(range(0, self.N3))) ** 2)
+        self.lapl_dft = (arr1[:, np.newaxis, np.newaxis] +
+               arr2[np.newaxis, :, np.newaxis] +
+               arr3[np.newaxis, np.newaxis, :])
+        self.lapl_dft[0][0][0] = 1.  # set (0, 0, 0) component to 1. because normally it is 0. (see poisson_solve)
+
         self.E = np.zeros((3,) + mesh_size)
         self.B = np.zeros((3,) + mesh_size)
 
         self.rho = np.zeros(mesh_size)
         self.J = np.zeros((3,) + mesh_size)
-
-        self.poisson_kernel = np.zeros(self.mesh_size)
-        self.calculate_poisson_kernel()
-
-    # NEED TO OPTIMIZE; or maybe don't need it and just remove
-    def calculate_poisson_kernel(self):
-        beta = 0.001
-        rho = np.zeros(self.mesh_size)
-        rho.fill(-1. / (self.N1 * self.N2 * self.N3))
-        rho[0][0][0] += 1.
-        if True:
-            for i in range(10000):
-                lapl = np.zeros(self.mesh_size)
-                lapl += self.k0[0]**2 * (np.roll(self.poisson_kernel, 1, axis=0)
-                                        - 2 * self.poisson_kernel
-                                         + np.roll(self.poisson_kernel, -1, axis=0))
-                lapl += self.k0[1]**2 * (np.roll(self.poisson_kernel, 1, axis=1)
-                                        - 2 * self.poisson_kernel
-                                         + np.roll(self.poisson_kernel, -1, axis=1))
-                lapl += self.k0[2]**2 * (np.roll(self.poisson_kernel, 1, axis=2)
-                                        - 2 * self.poisson_kernel
-                                         + np.roll(self.poisson_kernel, -1, axis=2))
-                self.poisson_kernel += beta * (lapl + rho)
-        self.poisson_kernel -= self.poisson_kernel[0][0][0]
 
     def compute_form_factor(self, R):
         # compute the form factor S_r(R) for all values of r,
@@ -144,8 +133,88 @@ class Grid:
                     self.J[1][i][jred][k] += temp
                     temp += C * W2[i][jred][k]
 
-    # CAN OPTIMIZE
-    def laplacian(self, phi):
+    def set_semistatic_init_conds(self):
+        # E = -gradm(phi), where lapl(phi) = -rho
+        # this ensures that divp(E) = rho
+        self.E = self.gradm(self.poisson_solve(self.rho))
+
+        # B = curlm(A), where lapl(A) = -J
+        # this ensures that curlp(B) ~~ J and divm(B) = 0
+        self.B = -self.curlm(np.array([
+            self.poisson_solve(self.J[0]),
+            self.poisson_solve(self.J[1]),
+            self.poisson_solve(self.J[2])
+        ]))
+
+    # TODO: replace np.fftn with np.rfftn (real Fourier transform), which is slightly faster
+    def poisson_solve(self, source):
+        # output f such that self.lapl(f) == source, and also the sum of f over all grid points is zero
+        assert isinstance(source, np.ndarray) and source.shape == self.mesh_size
+
+        rho_tilde = np.fft.fftn(source)  # compute the Fourier transform of charge density
+        f_tilde = np.divide(rho_tilde, self.lapl_dft)
+        f_tilde[0][0][0] = 0.  # set the constant term to zero
+        return np.real(np.fft.ifftn(f_tilde))
+
+    # TODO: test if these differential operators are implemented correctly, also perhaps optimize
+    def pdp(self, i, f):
+        # take the forward difference of a scalar function
+        assert isinstance(f, np.ndarray) and f.shape == self.mesh_size
+        return self.k0[i] * (np.roll(f, -1, axis=i) - f)
+
+    def pdm(self, i, f):
+        # take the backward difference of a scalar function
+        assert isinstance(f, np.ndarray) and f.shape == self.mesh_size
+        return self.k0[i] * (f - np.roll(f, 1, axis=i))
+
+    def gradp(self, f):
+        # the gradient operator, implemented with forward differences
+        assert isinstance(f, np.ndarray) and f.shape == self.mesh_size
+        return np.array([
+            self.pdp(0, f),
+            self.pdp(1, f),
+            self.pdp(2, f)
+        ])
+
+    def gradm(self, f):
+        # the gradient operator, implemented with backward differences
+        assert isinstance(f, np.ndarray) and f.shape == self.mesh_size
+        return np.array([
+            self.pdm(0, f),
+            self.pdm(1, f),
+            self.pdm(2, f)
+        ])
+
+    def divp(self, v):
+        # the divergence operator, implemented with forward differences
+        assert isinstance(v, np.ndarray) and v.shape == (3,) + self.mesh_size
+        return self.pdp(0, v[0]) + self.pdp(1, v[1]) + self.pdp(2, v[2])
+
+    def divm(self, v):
+        # the divergence operator, implemented with backward differences
+        assert isinstance(v, np.ndarray) and v.shape == (3,) + self.mesh_size
+        return self.pdm(0, v[0]) + self.pdm(1, v[1]) + self.pdm(2, v[2])
+
+    def curlp(self, v):
+        # the curl operator, implemented with forward differences
+        assert isinstance(v, np.ndarray) and v.shape == (3,) + self.mesh_size
+        return np.array([
+            self.pdp(1, v[2]) - self.pdp(2, v[1]),
+            self.pdp(2, v[0]) - self.pdp(0, v[2]),
+            self.pdp(0, v[1]) - self.pdp(1, v[0])
+        ])
+
+    def curlm(self, v):
+        # the curl operator, implemented with backward differences
+        assert isinstance(v, np.ndarray) and v.shape == (3,) + self.mesh_size
+        return np.array([
+            self.pdm(1, v[2]) - self.pdm(2, v[1]),
+            self.pdm(2, v[0]) - self.pdm(0, v[2]),
+            self.pdm(0, v[1]) - self.pdm(1, v[0])
+        ])
+
+    def lapl(self, phi):
+        # Laplacian operator
         assert isinstance(phi, np.ndarray) and phi.shape == self.mesh_size
         lapl = np.zeros(self.mesh_size)
         lapl += self.k0[0] ** 2 * (np.roll(phi, 1, axis=0)
@@ -158,51 +227,6 @@ class Grid:
                                    - 2 * phi
                                    + np.roll(phi, -1, axis=2))
         return lapl
-
-    # NEED TO OPTIMIZE
-    def set_electrostatic_init_conds(self):
-        self.B.fill(0)  # magnetic field is zero
-
-        phi = np.zeros(self.mesh_size)  # electric potential
-        beta = 0.001
-        rho = self.rho.copy()
-        rho -= np.sum(rho) / (self.N1 * self.N2 * self.N3)  # subtract average density
-        if True:
-            for i in range(10000):
-                lapl = self.laplacian(phi)
-                phi += beta * (lapl + rho)
-        phi -= phi[0][0][0]
-
-        # E = -grad phi
-        self.E[0] = -self.k0[0] * (np.roll(phi, -1, axis=0) - phi)  # forward differences
-        self.E[1] = -self.k0[1] * (np.roll(phi, -1, axis=1) - phi)
-        self.E[2] = -self.k0[2] * (np.roll(phi, -1, axis=2) - phi)
-
-    def pdp(self, i, f):
-        # take the forward difference of a scalar function
-        assert isinstance(f, np.ndarray) and f.shape == self.mesh_size
-        return self.k0[i] * (np.roll(f, -1, axis=0) - f)
-
-    def pdm(self, i, f):
-        # take the backward difference of a scalar function
-        assert isinstance(f, np.ndarray) and f.shape == self.mesh_size
-        return self.k0[i] * (f - np.roll(f, 1, axis=0))
-
-    def curlp(self, v):
-        assert isinstance(v, np.ndarray) and v.shape == (3,) + self.mesh_size
-        return np.array([
-            self.pdp(1, v[2]) - self.pdp(2, v[1]),
-            self.pdp(2, v[0]) - self.pdp(0, v[2]),
-            self.pdp(0, v[1]) - self.pdp(1, v[0])
-        ])
-
-    def curlm(self, v):
-        assert isinstance(v, np.ndarray) and v.shape == (3,) + self.mesh_size
-        return np.array([
-            self.pdm(1, v[2]) - self.pdm(2, v[1]),
-            self.pdm(2, v[0]) - self.pdm(0, v[2]),
-            self.pdm(0, v[1]) - self.pdm(1, v[0])
-        ])
 
     def evolve_fields(self, dt):
         # evolve the electric and magnetic field by one time step
@@ -253,26 +277,34 @@ class Particle:
         self.R += dt * self.v
 
 
+def test_1():
+    # test if Grid.set_semistatic_init_conds maintains div E = rho and div B = 0
+    N1 = random.randint(5, 200)
+    N2 = random.randint(5, 200)
+    N3 = random.randint(5, 200)
+    (xsize, ysize, zsize) = 1. + 9. * np.random.rand(3)
+
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize))
+
+    # randomize rho making sure that the total charge is zero
+    g.rho = -1. + 2. * np.random.rand(N1, N2, N3)
+    g.rho -= np.sum(g.rho) / (N1 * N2 * N3)
+
+    # randomize J
+    g.J = -1. + 2. * np.random.rand(3, N1, N2, N3)
+
+    g.set_semistatic_init_conds()
+
+    print('-- test 1 --')
+    print(np.max(np.abs(g.divp(g.E) - g.rho)))  # div E - rho
+    print(np.max(np.abs(g.divm(g.B))))          # div B
+    print('----')
+
+
 def main():
-    '''q = 1.
-    R = np.array([0.0, 0.0, 0.0])
-    v = np.array([0.5, 0.4, 0.7])
-    dt = 0.0000001
+    test_1()
 
-    g = Grid((10, 10, 10), (1., 1., 1.))
-
-    g.refresh_charge()
-    #g.deposit_charge(q, R, v, dt)
-    g.deposit_charge(1., np.array([-0.3, 0, 0]), np.zeros(3), 0.1)
-    g.deposit_charge(-1., np.array([0.3, 0, 0]), np.zeros(3), 0.1)
-    g.set_electrostatic_init_conds()
-
-    g.evolve_fields(0.1)
-    g.evolve_fields(0.1)
-
-    print(g.get_EB_at(np.array([0.0, 0.0, 0.0])))'''
-
-    particles = [
+    '''particles = [
         Particle(1., 1., np.array([0.1, 0.2, 0.3]), np.array([-0.2, -0.2, 0.1])),
         Particle(1., -1., np.array([0.4, 0.5, 0.6]), np.array([0.9, 0.0, 0.0]))
     ]
@@ -301,7 +333,7 @@ def main():
         for (q, R, v) in qRvlist:
             g.deposit_charge(q, R, v, dt)
 
-        g.evolve_fields(dt)
+        g.evolve_fields(dt)'''
 
 
 if __name__ == '__main__':
