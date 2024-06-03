@@ -143,9 +143,13 @@ def one_dim_quadr_spline(x):
     )
 
 
+# a bell-shaped particle of diameter 3
 QuadraticSplineFF = FormFactor(lambda x, y, z: one_dim_quadr_spline(x) *
                                                one_dim_quadr_spline(y) *
                                                one_dim_quadr_spline(z), 1)
+
+# to be used as a PLACEHOLDER only; not a physically meaningful form factor
+EmptyFF = FormFactor(None, 0)
 
 
 # ------------------------------------------------------------------------------
@@ -153,37 +157,48 @@ QuadraticSplineFF = FormFactor(lambda x, y, z: one_dim_quadr_spline(x) *
 # ------------------------------------------------------------------------------
 
 class Particle:
-    def __init__(self, m, q, R, v=None, p=None):
-        self.m = m
-        self.q = q
+    def __init__(self, m, q, R, v=None, u=None):
+        self.m = m  # mass
+        self.q = q  # charge
 
-        self.R = R
+        self.R = R.copy()     # position
+        self.v = np.zeros(3)  # velocity
+        self.u = np.zeros(3)  # reduced momentum, u = p / m = gamma v
 
         if not isinstance(v, type(None)):
-            self.v = v
-            self.p = np.zeros(3)
-            self.compute_p()
-        elif not isinstance(p, type(None)):
-            self.p = p
-            self.v = np.zeros(3)
+            self.v = v.copy()
+            self.compute_u()
+        elif not isinstance(u, type(None)):
+            self.u = u.copy()
             self.compute_v()
-        else:
-            self.v = np.zeros(3)
-            self.p = np.zeros(3)
 
-    def compute_p(self):
-        self.p = self.v / np.sqrt(1 - self.v[0]**2 - self.v[1]**2 - self.v[2]**2)
+    def compute_u(self):
+        self.u = self.v / np.sqrt(1 - self.v[0]**2 - self.v[1]**2 - self.v[2]**2)
 
     def compute_v(self):
-        self.v = self.p / np.sqrt(1 + self.p[0]**2 + self.p[1]**2 + self.p[2]**2)
+        self.v = self.u / np.sqrt(1 + self.u[0]**2 + self.u[1]**2 + self.u[2]**2)
 
+    # leave velocity the same and just move the particle
     def push_init(self, dt):
         self.R += dt * self.v
 
+    # the Vay particle pusher
     def push(self, dt, E, B):
-        self.p += (E + np.cross(self.v, B)) * self.q / self.m
-        self.compute_v()
+        g = self.q * dt / self.m
 
+        u_pr = self.u + g * (E + 0.5 * np.cross(self.v, B))  # u'            vector
+        gamma_pr_sq = 1 + np.dot(u_pr, u_pr)                 # (gamma')^2    scalar
+        tau = 0.5 * g * B                                    # tau           vector
+        sigma = gamma_pr_sq - np.dot(tau, tau)               # sigma         scalar
+        u_star = np.dot(u_pr, tau)                           # u^*           scalar
+        gamma_new = np.sqrt(0.5 * (sigma +                   # gamma_new     scalar
+            np.sqrt(sigma**2 + 4*(np.dot(tau, tau) + u_star**2))
+        ))
+        t = tau / gamma_new                                  # t             vector
+        s = 1 / (1 + np.dot(t, t))                           # s             scalar
+
+        self.u = s * (u_pr + np.dot(u_pr, t) * t + np.cross(u_pr, t))
+        self.v = self.u / gamma_new
         self.R += dt * self.v
 
 
@@ -216,7 +231,8 @@ class Grid:
         assert all(map(lambda x: isinstance(x, float), phys_size))
 
         assert isinstance(mesh_size, tuple) and len(mesh_size) == 3
-        assert all(map(lambda x: isinstance(x, int) and x > 0, mesh_size))
+        assert all(map(lambda x: isinstance(x, int), mesh_size))
+        assert all(map(lambda x: x >= 2 * form_factor.g + 3, mesh_size))  # large enough for Esirkepov calculation
 
         assert isinstance(form_factor, FormFactor)
 
@@ -228,6 +244,9 @@ class Grid:
         (self.N1, self.N2, self.N3) = self.mesh_size
         (self.Dx, self.Dy, self.Dz) = np.divide(phys_size, mesh_size)
         self.DV = self.Dx * self.Dy * self.Dz
+
+        # the largest time step with which field evolution is stable (see the writeup)
+        self.max_time_step = 1 / (1 / self.Dx**2 + 1 / self.Dy**2 + 1 / self.Dz**2)
 
         # (1/dx, 1/dy, 1/dz)
         self.k0 = np.divide(mesh_size, phys_size)
@@ -241,7 +260,7 @@ class Grid:
         self.lapl_dft = (arr1[:, np.newaxis, np.newaxis] +
                arr2[np.newaxis, :, np.newaxis] +
                arr3[np.newaxis, np.newaxis, :])
-        self.lapl_dft[0][0][0] = 1.  # set (0, 0, 0) component to 1. because normally it is 0. (see poisson_solve)
+        self.lapl_dft[0, 0, 0] = 1.  # set (0, 0, 0) component to 1. because normally it is 0. (see poisson_solve)
 
         self.E = np.zeros((3,) + mesh_size)
         self.B = np.zeros((3,) + mesh_size)
@@ -249,7 +268,6 @@ class Grid:
         self.rho = np.zeros(mesh_size)
         self.J = np.zeros((3,) + mesh_size)
 
-    # TODO: test if these differential operators are implemented correctly, also perhaps optimize
     def pdp(self, i, f):
         # take the forward difference of a scalar function
         assert isinstance(f, np.ndarray) and f.shape == self.mesh_size
@@ -329,7 +347,7 @@ class Grid:
 
         rho_tilde = np.fft.fftn(source)  # compute the Fourier transform of charge density
         f_tilde = np.divide(rho_tilde, self.lapl_dft)
-        f_tilde[0][0][0] = 0.  # set the constant term to zero
+        f_tilde[0, 0, 0] = 0.  # set the constant term to zero
         return np.real(np.fft.ifftn(f_tilde))
 
     # set rho and J to zero
@@ -350,12 +368,12 @@ class Grid:
         # initial position, divided by grid cell size;
         # the closest grid point; and
         # the difference between the position and the closest grid point, respectively
-        (x0k, y0k, z0k) = R0 * self.k0
+        (x0k, y0k, z0k) = R0 * self.k0 - 1/2  # subtract 1/2 because charge density is defined in the middle of a cell
         (i0, j0, k0) = tuple(map(round, (x0k, y0k, z0k)))
         (disp_x0, disp_y0, disp_z0) = (x0k - i0, y0k - j0, z0k - k0)
 
         # same, but for final position
-        (x1k, y1k, z1k) = R1 * self.k0
+        (x1k, y1k, z1k) = R1 * self.k0 - 1/2  # subtract 1/2 because charge density is defined in the middle of a cell
         (i1, j1, k1) = tuple(map(round, (x1k, y1k, z1k)))
         (disp_x1, disp_y1, disp_z1) = (x1k - i1, y1k - j1, z1k - k1)
 
@@ -401,8 +419,7 @@ class Grid:
 
     # set E and B to be "almost stationary" (see the writeup)
     def set_semistatic_init_conds(self):
-        # check if the total charge is (approximately) zero
-        assert abs(self.DV * np.sum(self.rho)) < 0.1**9
+        assert abs(self.DV * np.sum(self.rho)) < 1e-9  # the total charge must be zero
 
         # E = -gradm(phi), where lapl(phi) = -rho
         # this ensures that divp(E) = rho
@@ -418,6 +435,8 @@ class Grid:
 
     # evolve the electric and magnetic field by one time step
     def evolve_fields(self, dt):
+        assert 0 < dt < self.max_time_step
+
         self.E += dt * (self.curlp(self.B) - self.J)
         self.B += dt * (-self.curlm(self.E))
 
@@ -449,9 +468,501 @@ class Grid:
 #                              TESTS AND MAIN
 # ------------------------------------------------------------------------------
 
-# test if charge deposition maintains d_dt rho + div J = 0
-# Grid.deposit_charge, Particle.push_init
-def test_0():
+# test Grid.pdp and Grid.pdm on a simple example,
+# in particular testing if the derivative correctly wraps around
+# @test: Grid.pdp, Grid.pdm
+def unit_test_0():
+    print('-- unit test 0 --')
+
+    (N1, N2, N3) = (4, 5, 6)
+    (xsize, ysize, zsize) = (2., 3., 7.)
+    (Dx, Dy, Dz) = (xsize / N1, ysize / N2, zsize / N3)
+
+    # initialize an example function
+    f = np.zeros((N1, N2, N3))
+    for i in range(N1):
+        for j in range(N2):
+            for k in range(N3):
+                f[i, j, k] = (i + 3) * (j + 3) * (k + 3)
+
+    # compute the derivatives of f
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), EmptyFF)
+    (f0p, f0m) = (g.pdp(0, f), g.pdm(0, f))
+    (f1p, f1m) = (g.pdp(1, f), g.pdm(1, f))
+    (f2p, f2m) = (g.pdp(2, f), g.pdm(2, f))
+
+    # compare the result with what is expected
+    for i in range(N1):
+        for j in range(N2):
+            for k in range(N3):
+                # test pdp(0, f)
+                expected = -(N1-1) * (j + 3) * (k + 3) / Dx if i == N1 - 1 else (j + 3) * (k + 3) / Dx
+                assert abs(f0p[i, j, k] - expected) < 1e-10
+
+                # test pdm(0, f)
+                expected = -(N1-1) * (j + 3) * (k + 3) / Dx if i == 0 else (j + 3) * (k + 3) / Dx
+                assert abs(f0m[i, j, k] - expected) < 1e-10
+
+                # test pdp(1, f)
+                expected = -(N2-1) * (i + 3) * (k + 3) / Dy if j == N2 - 1 else (i + 3) * (k + 3) / Dy
+                assert abs(f1p[i, j, k] - expected) < 1e-10
+
+                # test pdm(1, f)
+                expected = -(N2-1) * (i + 3) * (k + 3) / Dy if j == 0 else (i + 3) * (k + 3) / Dy
+                assert abs(f1m[i, j, k] - expected) < 1e-10
+
+                # test pdp(2, f)
+                expected = -(N3-1) * (i + 3) * (j + 3) / Dz if k == N3 - 1 else (i + 3) * (j + 3) / Dz
+                assert abs(f2p[i, j, k] - expected) < 1e-10
+
+                # test pdm(2, f)
+                expected = -(N3-1) * (i + 3) * (j + 3) / Dz if k == 0 else (i + 3) * (j + 3) / Dz
+                assert abs(f2m[i, j, k] - expected) < 1e-10
+
+
+# test if the discretized differential operators relate to each other correctly, part 1: scalar fields
+# @test: Grid.gradp, Grid.gradm, Grid.divp, Grid.divm, Grid.curlp, Grid.curlm, Grid.lapl
+def unit_test_1():
+    print('-- unit test 1 --')
+
+    # initialize the grid with some parameters
+    (N1, N2, N3) = (200, 5, 13)
+    (xsize, ysize, zsize) = (2., 3., 7.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), EmptyFF)
+
+    # initialize some random scalar field
+    f = -1. + 2. * np.random.rand(N1, N2, N3)
+
+    # check that the derivatives all commute with one another
+    for i in range(3):
+        for j in range(3):
+            assert np.max(np.abs(
+                g.pdp(i, g.pdp(j, f)) - g.pdp(j, g.pdp(i, f))
+            )) < 1e-10
+            assert np.max(np.abs(
+                g.pdp(i, g.pdm(j, f)) - g.pdm(j, g.pdp(i, f))
+            )) < 1e-10
+            assert np.max(np.abs(
+                g.pdm(i, g.pdm(j, f)) - g.pdm(j, g.pdm(i, f))
+            )) < 1e-10
+
+    # check that the gradient is the vector of derivatives
+    assert np.max(np.abs(
+        g.gradp(f) - np.array([g.pdp(0, f), g.pdp(1, f), g.pdp(2, f)])
+    )) < 1e-10
+    assert np.max(np.abs(
+        g.gradm(f) - np.array([g.pdm(0, f), g.pdm(1, f), g.pdm(2, f)])
+    )) < 1e-10
+
+    # check that the curl of a gradient is zero
+    assert np.max(np.abs(
+        g.curlp(g.gradp(f))
+    )) < 1e-10
+    assert np.max(np.abs(
+        g.curlm(g.gradm(f))
+    )) < 1e-10
+
+    # check that the Laplacian is the divergence of the gradient
+    assert np.max(np.abs(
+        g.lapl(f) - g.divp(g.gradm(f))
+    )) < 1e-10
+    assert np.max(np.abs(
+        g.lapl(f) - g.divm(g.gradp(f))
+    )) < 1e-10
+
+
+# test if the discretized differential operators relate to each other correctly, part 2: vector fields
+# @test: Grid.divp, Grid.divm, Grid.curlp, Grid.curlm
+def unit_test_2():
+    print('-- unit test 2 --')
+
+    # initialize the grid with some parameters
+    (N1, N2, N3) = (200, 5, 13)
+    (xsize, ysize, zsize) = (2., 3., 7.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), EmptyFF)
+
+    # initialize some random vector field
+    v = -1. + 2. * np.random.rand(3, N1, N2, N3)
+
+    # check that the divergence of a curl is zero
+    assert np.max(np.abs(g.divp(g.curlp(v)))) < 1e-10
+    assert np.max(np.abs(g.divm(g.curlm(v)))) < 1e-10
+
+
+# test if for a constant function, all differential operators are zero
+# @test: Grid.gradp, Grid.gradm, Grid.divp, Grid.divm, Grid.curlp, Grid.curlm, Grid.lapl
+def unit_test_3():
+    print('-- unit test 3 --')
+
+    # initialize the grid with some parameters
+    (N1, N2, N3) = (200, 5, 13)
+    (xsize, ysize, zsize) = (2., 3., 7.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), EmptyFF)
+
+    # initialize constant scalar and vector fields
+    f = np.zeros((N1, N2, N3))
+    v = np.zeros((3, N1, N2, N3))
+    f += -1. + 2. * np.random.rand(1)
+    v += -1. + 2. * np.random.rand(1)
+
+    # derivative operators
+    for i in range(3):
+        assert np.max(np.abs(g.pdp(i, f))) < 1e-10
+        assert np.max(np.abs(g.pdm(i, f))) < 1e-10
+
+    # scalar field vector operators
+    for func in (g.gradp, g.gradm, g.lapl):
+        assert np.max(np.abs(func(f))) < 1e-10
+
+    # vector field vector operators
+    for func in (g.divp, g.divm, g.curlp, g.curlm):
+        assert np.max(np.abs(func(v))) < 1e-10
+
+
+# test if the Poisson equation solver works correctly
+# @test: Grid.poisson_solve
+def unit_test_4():
+    print('-- unit test 4 --')
+
+    # initialize the grid with some parameters
+    (N1, N2, N3) = (20, 5, 5)
+    (xsize, ysize, zsize) = (2., 3., 7.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), EmptyFF)
+
+    # initialize some random scalar field
+    source = -1. + 2. * np.random.rand(N1, N2, N3)
+
+    # ensure the total is zero, otherwise Poisson's equation has no solution on the torus
+    source -= np.sum(source) / (N1 * N2 * N3)
+
+    # solve Poisson's equation
+    soln = g.poisson_solve(source)
+
+    # check that Poisson's equation is satisfied
+    assert np.max(np.abs(source - g.lapl(soln))) < 1e-10
+
+    # check the additional condition that the sum of soln is zero (which we artificially impose)
+    assert abs(np.sum(soln)) < 1e-10
+
+
+# test if wrapadound_array_dot works correctly on two simple one-dimensional arrays
+# @test: wraparound_array_dot
+def unit_test_5():
+    print('-- unit test 5 --')
+
+    A = np.array(range(10))  # [0, ..., 9]
+    B = np.array([1, 1])
+    assert wraparound_array_dot(A, B, [0]) == 1     # compute A[0] + A[1]
+    assert wraparound_array_dot(A, B, [100]) == 1   # index 100 is the same as index 0 because 100 is divisible by 10
+    assert wraparound_array_dot(A, B, [3]) == 7     # compute A[3] + A[4]
+    assert wraparound_array_dot(A, B, [-27]) == 7   # index -27 is the same as index 3 because -27 = 3 + (-3) * 10
+    assert wraparound_array_dot(A, B, [-1]) == 9    # compute A[-1] + A[0]
+    assert wraparound_array_dot(A, B, [9]) == 9     # compute A[9] + A[0]
+
+    B = np.array([1, 2, -3, -4, -5])
+    assert wraparound_array_dot(A, B, [8]) == 12    # compute A[8] + 2 A [9] - 3 A[0] - 4 A[1] - 5 A[2]
+
+
+# test if wrapadound_array_dot works correctly on two two-dimensional arrays
+# @test: wraparound_array_dot
+def unit_test_6():
+    print('-- unit test 6 --')
+
+    # initialize arrays
+    A = np.zeros([7, 7])
+    for i in range(7):
+        for j in range(7):
+            A[i, j] = i + 2 * j + 3 * i * j
+    B = np.array([[1, 2],
+                  [3, 4]])
+
+    # check that when wraparound is not needed, the sum matches the analytical result
+    for i in range(6):
+        for j in range(6):
+            assert wraparound_array_dot(A, B, [i, j]) == 28*i + 41*j + 30*i*j + 31
+
+    # check the cases when one of the indexes wraps around
+    for j in range(6):  # case i = 6, j < 6
+        assert wraparound_array_dot(A, B, [6, j]) == 66 + 74*j
+    for i in range(6):  # case i < 6, j = 6
+        assert wraparound_array_dot(A, B, [i, 6]) == 109 + 82*i
+
+    # check the case when both of the indexes wrap around
+    assert wraparound_array_dot(A, B, [6, 6]) == 174
+
+
+# test if wraparound_array_add works correctly on two simple one-dimensional arrays;
+# assume it works for more complicated arrays as well because it's implemented
+# very similarly to wraparound_array_dot
+# @test: wraparound_array_add
+def unit_test_7():
+    print('-- unit test 7 --')
+
+    A = np.zeros(10)
+    B = np.array([1, 2, 3])
+
+    wraparound_array_add(A, B, [0])  # add B at index 0
+    assert np.array_equal(A, np.array([1, 2, 3, 0, 0, 0, 0, 0, 0, 0]))
+
+    wraparound_array_add(A, B, [201])  # index 201 is the same as index 1
+    assert np.array_equal(A, np.array([1, 3, 5, 3, 0, 0, 0, 0, 0, 0]))
+
+    wraparound_array_add(A, B, [-1])  # add B at index -1
+    assert np.array_equal(A, np.array([3, 6, 5, 3, 0, 0, 0, 0, 0, 1]))
+
+    wraparound_array_add(A, B, [8])  # add B at index 8
+    assert np.array_equal(A, np.array([6, 6, 5, 3, 0, 0, 0, 0, 1, 3]))
+
+
+# test if charge deposition works correctly on a particular example of a stationary partice,
+# testing in particular if charge deposition correctly wraps around
+# @test: Grid.deposit_charge, QuadraticSplineFF
+def unit_test_8():
+    print('-- unit test 8 --')
+
+    (N1, N2, N3) = (7, 7, 7)
+    (xsize, ysize, zsize) = (1., 2., 3.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
+
+    (Dx, Dy, Dz) = (xsize / N1, ysize / N2, zsize / N3)
+    DV = Dx * Dy * Dz
+
+    q = 1.  # charge
+    dt = 0.1  # time step; doesn't affect anything but have to initialize
+
+    # particle at the corner of eight cells
+    R = np.array([0, 0, 0])
+
+    rho_expected = np.zeros((N1, N2, N3))
+    rho_expected[0, 0, 0] = rho_expected[0, 0, -1] = 1/8
+    rho_expected[0, -1, 0] = rho_expected[0, -1, -1] = 1/8
+    rho_expected[-1, 0, 0] = rho_expected[-1, 0, -1] = 1/8
+    rho_expected[-1, -1, 0] = rho_expected[-1, -1, -1] = 1/8
+    rho_expected *= q / DV
+
+    g.refresh_charge()
+    g.deposit_charge(q, R, R, dt)
+
+    assert np.max(np.abs(rho_expected - g.rho)) < 1e-10
+
+
+# test if charge deposition works correctly on a particular example of a stationary particle
+# @test: Grid.deposit_charge, QuadraticSplineFF
+def unit_test_9():
+    print('-- unit test 9 --')
+
+    (N1, N2, N3) = (7, 7, 7)
+    (xsize, ysize, zsize) = (1., 2., 3.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
+
+    (Dx, Dy, Dz) = (xsize / N1, ysize / N2, zsize / N3)
+    DV = Dx * Dy * Dz
+
+    q = 1.  # charge
+    dt = 0.1  # time step; doesn't affect anything but have to initialize
+
+    R = np.array([3.3 * Dx, 4.6 * Dy, 3.65 * Dz])
+
+    rho_expected = np.zeros((N1, N2, N3))
+    for (i, f1) in [(2, 0.245), (3, 0.71), (4, 0.045)]:
+        for (j, f2) in [(3, 0.08), (4, 0.74), (5, 0.18)]:
+            for (k, f3) in [(2, 0.06125), (3, 0.7275), (4, 0.21125)]:
+                rho_expected[i, j, k] = f1 * f2 * f3
+    rho_expected *= q / DV
+
+    g.refresh_charge()
+    g.deposit_charge(q, R, R, dt)
+
+    assert np.max(np.abs(rho_expected - g.rho)) < 1e-10
+
+
+# test if charge deposition works correctly on a particular example of a moving particle
+# @test: Grid.deposit_charge
+def unit_test_10():
+    print('-- unit test 10 --')
+
+    (N1, N2, N3) = (7, 7, 7)
+    (xsize, ysize, zsize) = (1., 2., 3.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
+
+    (Dx, Dy, Dz) = (xsize / N1, ysize / N2, zsize / N3)
+    DV = Dx * Dy * Dz
+
+    q = 123.45  # charge
+    dt = 0.7  # time step
+
+    R0 = np.array([3.3 * Dx, 4.6 * Dy, 3.65 * Dz])  # initial position
+    R1 = np.array([3.5 * Dx, 4.0 * Dy, 4.0 * Dz])   # final position (after time dt)
+
+    # compute the expected charge density when the particle is at position R0
+    rho_0 = np.zeros((N1, N2, N3))
+    for (i, f1) in [(2, 0.245), (3, 0.71), (4, 0.045)]:
+        for (j, f2) in [(3, 0.08), (4, 0.74), (5, 0.18)]:
+            for (k, f3) in [(2, 0.06125), (3, 0.7275), (4, 0.21125)]:
+                rho_0[i, j, k] = f1 * f2 * f3
+    rho_0 *= q / DV
+
+    # compute the expected charge density when the particle is at position R1
+    rho_1 = np.zeros((N1, N2, N3))
+    for (i, f1) in [(2, 0.125), (3, 0.75), (4, 0.125)]:
+        for (j, f2) in [(3, 0.5), (4, 0.5)]:
+            for (k, f3) in [(3, 0.5), (4, 0.5)]:
+                rho_1[i, j, k] = f1 * f2 * f3
+    rho_1 *= q / DV
+
+    g.refresh_charge()
+    g.deposit_charge(q, R0, R1, dt)
+
+    assert np.max(np.abs(rho_1 - g.rho)) < 1e-10  # charge density must be deposited with the new position
+
+    assert np.max(np.abs((rho_1 - rho_0) / dt + g.divp(g.J))) < 1e-10  # check charge conservation, d/dt rho + div J = 0
+
+    # check that the current vanishes sufficiently far on the torus
+    assert np.max(np.abs(g.J[:, 0, :, :])) < 1e-10  # the current must be zero far away
+    assert np.max(np.abs(g.J[:, :, 0, :])) < 1e-10  # the current must be zero far away
+    assert np.max(np.abs(g.J[:, :, :, 0])) < 1e-10  # the current must be zero far away
+
+
+# test if the Vay particle pusher works correctly on a specific example
+# @test: Particle.push
+def unit_test_11():
+    print('-- unit test 11 --')
+
+    # initialize particle
+    q = 2.
+    m = 16.
+    R0 = np.array([8.3, -2.7, 0.5])
+    v = np.array([0.1, 0.2, 0.3])
+
+    # initialize fields and time step
+    E = np.array([1., 0., 0.])
+    B = np.array([0, -0.5, -0.5])
+    dt = 0.8
+
+    # push particle
+    ptc = Particle(m, q, R0, v=v)
+    ptc.push(dt, E, B)
+
+    # test that even though R0 and v were passed to the particle init function, they were not modified
+    assert np.max(np.abs(R0 - np.array([8.3, -2.7, 0.5]))) < 1e-10
+    assert np.max(np.abs(v - np.array([0.1, 0.2, 0.3]))) < 1e-10
+
+    # check if the result matches what is expected
+    # (see Mathematica notebook for the calculation)
+    R_expected = np.array([8.455496301546557, -2.53677332116603, 0.7313748403543063])
+    v_expected = np.array([0.194370376933196, 0.2040333485424628, 0.2892185504428829])
+    assert np.max(np.abs(ptc.R - R_expected)) < 1e-10
+    assert np.max(np.abs(ptc.v - v_expected)) < 1e-10
+
+
+# test if the Vay particle pusher works correctly on an example of a very fast particle and strong E, B
+# @test: Particle.push
+def unit_test_12():
+    print('-- unit test 12 --')
+
+    # initialize particle
+    q = 567.
+    m = 234.
+    R0 = np.array([190, 2.87, 0.354])
+    v = np.array([-0.9, -0.25, 0.34])
+
+    # initialize fields and time step
+    E = np.array([123, 456, 789])
+    B = np.array([900, 5284, -345])
+    dt = 0.35
+
+    # push particle
+    ptc = Particle(m, q, R0, v=v)
+    ptc.push(dt, E, B)
+
+    # test that even though R0 and v were passed to the particle init function, they were not modified
+    assert np.max(np.abs(R0 - np.array([190, 2.87, 0.354]))) < 1e-10
+    assert np.max(np.abs(v - np.array([-0.9, -0.25, 0.34]))) < 1e-10
+
+    # check if the result matches what is expected
+    # (see Mathematica notebook for the calculation)
+    R_expected = np.array([190.20521054643586, 3.1078960452886824, 0.19974866329624416])
+    v_expected = np.array([0.5863158469596151, 0.6797029865390921, -0.4407181048678738])
+    assert np.max(np.abs(ptc.R - R_expected)) < 1e-10
+    assert np.max(np.abs(ptc.v - v_expected)) < 1e-10
+
+
+# test if the velocity remains unchanged if E + v x B = 0
+def unit_test_13():
+    print('-- unit test 13 --')
+
+    # initialize particle
+    q = 567.
+    m = 234.
+    R0 = np.array([190, 2.87, 0.354])
+    v = np.array([-0.9, -0.25, 0.34])
+
+    # initialize fields and time step
+    B = np.array([900, 5284, -345])
+    dt = 0.35
+    E = -np.cross(v, B)  # ensure that E + v x B = 0
+
+    # push particle
+    ptc = Particle(m, q, R0, v=v)
+    ptc.push(dt, E, B)
+
+    # check if the result matches what is expected
+    # (see Mathematica notebook for the calculation)
+    R_expected = R0 + dt * v
+    v_expected = v
+    assert np.max(np.abs(ptc.R - R_expected)) < 1e-10
+    assert np.max(np.abs(ptc.v - v_expected)) < 1e-10
+
+
+# test that the gyroradius for precession in a constant magnetic field is correctly predicted
+# @test: Particle.push
+def unit_test_14():
+    print('-- unit test 14 --')
+
+    # initialize particle
+    q = 567.
+    m = 234.
+    R0 = np.zeros(3)
+    v = np.array([0.5, 0, 0])
+
+    # initialize simulation parameters
+    Bz = 0.123
+    gamma = 1 / np.sqrt(1 - np.dot(v, v))
+    omega_c = q * Bz / (gamma * m)  # cyclotron frequency
+    dt = (1/omega_c) * 2 / (1 + np.sqrt(2))  # pick dt such that the particle makes an octagon every 8 time steps
+
+    # initialize fields
+    E = np.zeros(3)
+    B = np.array([0, 0, Bz])
+
+    # initialize the particle and push it by four time steps
+    ptc = Particle(m, q, R0, v=v)
+    ptc.push(dt, E, B)
+    ptc.push(dt, E, B)
+    ptc.push(dt, E, B)
+    ptc.push(dt, E, B)
+
+    # check if the result matches what is expected
+    # (see Mathematica notebook for the calculation)
+    R__norm_expected = 2 * np.linalg.norm(v) / omega_c * np.sqrt(1 + (omega_c * dt / 2)**2)
+    v_expected = -v
+    assert abs(np.linalg.norm(ptc.R) - R__norm_expected) < 1e-10
+    assert np.max(np.abs(ptc.v - v_expected)) < 1e-10
+
+    # check that after eight time steps, the particle returns to the initial configuration
+    ptc.push(dt, E, B)
+    ptc.push(dt, E, B)
+    ptc.push(dt, E, B)
+    ptc.push(dt, E, B)
+    assert abs(np.linalg.norm(ptc.R)) < 1e-10
+    assert np.max(np.abs(ptc.v - v)) < 1e-10
+
+
+# test if charge deposition together with particle pushing maintain d_dt rho + div J = 0
+# @test: Grid.deposit_charge, Particle.push_init
+def intg_test_0():
+    print('-- integration test 0 --')
+
     # generate a random grid
     N1 = random.randint(5, 200)
     N2 = random.randint(5, 200)
@@ -488,15 +999,15 @@ def test_0():
     rho_2 = g.rho.copy()
 
     # compute the error
-    e = (rho_2 - rho_1) / dt + g.divp(g.J)
-    print('-- test 0 --')
-    print('mp', np.max(np.abs(e)))  # pd^+_0 rho + div^+ cdot J = 0 should hold to machine precision
-    print('----')
+    # NOTE: the tolerance here is 1e-9 instead of 1e-10
+    assert np.max(np.abs((rho_2 - rho_1) / dt + g.divp(g.J))) < 1e-9  # pd^+_0 rho + div^+ cdot J should be zero
 
 
 # test if initial conditions satisfy div E = rho and div B = 0
-# Grid.set_semistatic_init_conds, Grid.divp, Grid.divm
-def test_1():
+# @test: Grid.set_semistatic_init_conds, Grid.divp, Grid.divm
+def intg_test_1():
+    print('-- integration test 1 --')
+
     # generate a random grid
     N1 = random.randint(5, 200)
     N2 = random.randint(5, 200)
@@ -516,34 +1027,31 @@ def test_1():
     g.set_semistatic_init_conds()
 
     # compute the error
-    print('-- test 1 --')
-    print('mp', np.max(np.abs(g.divp(g.E) - g.rho)))  # div E - rho = 0 should hold to machine precision
-    print('mp', np.max(np.abs(g.divm(g.B))))          # div B = 0 should hold to machine precision
-    print('----')
+    assert np.max(np.abs(g.divp(g.E) - g.rho)) < 1e-10  # div E - rho = 0 should hold to machine precision
+    assert np.max(np.abs(g.divm(g.B))) < 1e-10          # div B = 0 should hold to machine precision
 
 
-# test if div E = rho and div B = 0 are maintained through time evolution
-# Grid.set_semistatic_init_conds, Grid.evolve_fields, Grid.deposit_charge, Particle.push
-def test_2():
-    # generate a random grid
-    N1 = random.randint(5, 200)
-    N2 = random.randint(5, 200)
-    N3 = random.randint(5, 200)
-    (xsize, ysize, zsize) = 1. + 9. * np.random.rand(3)
+# test if div E = rho and div B = 0, as well as d/dt rho + div J = 0, are maintained through time evolution
+# @test: Grid.set_semistatic_init_conds, Grid.evolve_fields, Grid.deposit_charge, Particle.push
+def intg_test_2():
+    print('-- integration test 2 --')
 
+    # initialize a grid with numerically difficult parameters
+    (N1, N2, N3) = (50, 200, 7)
+    (xsize, ysize, zsize) = (1., 2., 8.)
     g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
 
     # generate some random particles, ensuring that the total charge is zero
-    nparticles = random.randint(0, 40)
+    nparticles = 20
     particles = [Particle(1. + 3. * random.random(),                            # mass
                           -1. + 2. * random.random(),                           # charge
                           np.array([xsize, ysize, zsize]) * np.random.rand(3),  # position
                           p=-1. + 2. * np.random.rand(3))                       # momentum
         for i in range(nparticles)]
-    particles[-1].q = -sum(map(lambda ptc: ptc.q, particles[:-1]))
+    particles[-1].q = -sum(map(lambda ptc: ptc.q, particles[:-1]))  # ensure that the total charge is zero
 
     # pick a time step which is not too large
-    dt = (0.01 + 0.98 * random.random()) * min(xsize / N1, ysize / N2, zsize / N3)
+    dt = 0.95 * g.max_time_step
 
     # set initial conditions
     g.refresh_charge()
@@ -554,8 +1062,7 @@ def test_2():
     g.set_semistatic_init_conds()
 
     # run the simulation for some number of time steps
-    nsteps = random.randint(2, 30)
-    for i in range(nsteps):
+    for i in range(100):
         # @pre: each particle is ptc = (q, R_t, v_t), and also g.rho is at time t and g.J at time t-1,
         # and g.E and g.B are at time t
 
@@ -574,6 +1081,8 @@ def test_2():
             # at this point, ptc = (q, R_{t+1}, v_{t+1}),
             # where (IMPORTANT) R_{t+1} = R_t + dt * v_{t+1}, otherwise cannot guarantee charge conservation
 
+        rho_old = g.rho.copy()
+
         # update charge and current densities, as well as field strengths
         g.refresh_charge()
         for (q, R0, R1) in qR0R1list:
@@ -581,14 +1090,18 @@ def test_2():
         # at this point, g.rho is at time t+1 because computed using particles' positions at time t+1,
         # an g.J is at time t
 
+        # check that charge is conserved
+        # NOTE: the tolerance is rather loose here, 1e-8 instead of 1e-10
+        assert np.max(np.abs((g.rho - rho_old) / dt + g.divp(g.J))) < 1e-8  # d/dt rho + div J must be zero
+
         g.evolve_fields(dt)
         # at this point, g.E and g.B are at time t+1
 
     # compute the errors
-    print('-- test 2 --')
-    print('mp', np.max(np.abs(g.divp(g.E) - g.rho)))  # div E - rho should hold to machine precision
-    print('mp', np.max(np.abs(g.divm(g.B))))          # div B should hold to machine precision
-    print('----')
+    # NOTE: there is another assert in the time loop above
+    # NOTE: the tolerance is rather loose here, 1e-8 instead of 1e-10
+    assert np.max(np.abs(g.divp(g.E) - g.rho)) < 1e-8  # div E - rho should hold to machine precision
+    assert np.max(np.abs(g.divm(g.B))) < 1e-8          # div B should hold to machine precision
 
 
 # test if the field of two static charges is close to what we expect in the continuous case
@@ -673,14 +1186,33 @@ def soft_test_1():
 
 def main():
     np.set_printoptions(suppress=True, precision=2)
-    test_0()
-    test_1()
-    test_2()
+    np.random.seed(0)
+    random.seed(0)
 
-    soft_test_0()
-    soft_test_1()
+    unit_test_0()
+    unit_test_1()
+    unit_test_2()
+    unit_test_3()
+    unit_test_4()
+    unit_test_5()
+    unit_test_6()
+    unit_test_7()
+    unit_test_8()
+    unit_test_9()
+    unit_test_10()
+    unit_test_11()
+    unit_test_12()
+    unit_test_13()
+    unit_test_14()
 
-    input('Press ENTER to complete')
+    #intg_test_0()
+    #intg_test_1()
+    #intg_test_2()
+
+    #soft_test_0()
+    #soft_test_1()
+
+    #input('Press ENTER to complete')
 
 
 if __name__ == '__main__':
