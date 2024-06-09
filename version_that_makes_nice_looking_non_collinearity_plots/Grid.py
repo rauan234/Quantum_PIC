@@ -106,8 +106,7 @@ def wraparound_array_dot(A, B, ind):
 #                                  GRID
 # -------------------------------------------------------------------------------
 # A class to store and modify the electric and magnetic fields, as well as charge
-# and current densities. Includes many complicated functions. The most complex
-# functions are deposit_charge and get_EB_at.
+# and current densities. Includes many complicated functions.
 #
 # RELIES ON:
 #   [*] FormFactor
@@ -125,13 +124,13 @@ class Grid:
         assert isinstance(form_factor, FormFactor)
 
         self.phys_size = phys_size  # (xsize, ysize, zsize), say in meters
-        self.mesh_size = mesh_size  # (N1, N2, N3), number of mesh points in each dimension
+        self.mesh_size = mesh_size  # (N_1, N_2, N_3), number of mesh points in each dimension
 
-        self.form_factor = form_factor  # form factor of the super-particles
+        self.form_factor = form_factor
 
-        (self.N1, self.N2, self.N3) = self.mesh_size                   # number of mesh points in each direction
-        (self.Dx, self.Dy, self.Dz) = np.divide(phys_size, mesh_size)  # grid spacings
-        self.DV = self.Dx * self.Dy * self.Dz                          # grid cell volume
+        (self.N1, self.N2, self.N3) = self.mesh_size
+        (self.Dx, self.Dy, self.Dz) = np.divide(phys_size, mesh_size)
+        self.DV = self.Dx * self.Dy * self.Dz
 
         # the largest time step with which field evolution is stable (see the writeup)
         self.max_time_step = np.sqrt(1 / (1 / self.Dx**2 + 1 / self.Dy**2 + 1 / self.Dz**2))
@@ -140,30 +139,21 @@ class Grid:
         self.k0 = np.divide(mesh_size, phys_size)
         self.one_over_dV = self.k0[0] * self.k0[1] * self.k0[2]
 
-        # store the Fourier space representation of the lalplacian operator
-        self.lapl_dft = np.zeros(self.mesh_size)
-        self.initialize_lapl_dft()
-
-        self.E = np.zeros((3,) + mesh_size)  # electric field
-        self.B = np.zeros((3,) + mesh_size)  # magnetic field
-
-        self.Ec = np.zeros((3,) + mesh_size)  # centered electric field, to be computed from self.E
-        self.Bc = np.zeros((3,) + mesh_size)  # centered magnetic field, to be computed from self.B
-        self.EcBc_initialized = False         # whether Ec and Bc has been computed
-
-        self.rho = np.zeros(mesh_size)       # charge density
-        self.J = np.zeros((3,) + mesh_size)  # current density
-
-    # initialize lapl_dft, which encodes how the
-    # discrete Fourier transform of a function relates to the original DFT
-    def initialize_lapl_dft(self):
+        # initialize lapl_dft, which encodes how the
+        # discrete Fourier transform of a function relates to the original DFT
         arr1 = -4 / (self.Dx ** 2) * (np.sin(np.pi / self.N1 * np.array(range(0, self.N1))) ** 2)
         arr2 = -4 / (self.Dy ** 2) * (np.sin(np.pi / self.N2 * np.array(range(0, self.N2))) ** 2)
         arr3 = -4 / (self.Dz ** 2) * (np.sin(np.pi / self.N3 * np.array(range(0, self.N3))) ** 2)
         self.lapl_dft = (arr1[:, np.newaxis, np.newaxis] +
-                         arr2[np.newaxis, :, np.newaxis] +
-                         arr3[np.newaxis, np.newaxis, :])
+               arr2[np.newaxis, :, np.newaxis] +
+               arr3[np.newaxis, np.newaxis, :])
         self.lapl_dft[0, 0, 0] = 1.  # set (0, 0, 0) component to 1. because normally it is 0. (see poisson_solve)
+
+        self.E = np.zeros((3,) + mesh_size)
+        self.B = np.zeros((3,) + mesh_size)
+
+        self.rho = np.zeros(mesh_size)
+        self.J = np.zeros((3,) + mesh_size)
 
     # cross product of two vector fields
     def cross(self, A, B):
@@ -202,9 +192,9 @@ class Grid:
         assert isinstance(B, np.ndarray) and B.shape == (3,) + self.mesh_size
 
         return np.array([
-            A[1] * self.half_shiftp(0, B[2]) - A[2] * self.half_shiftp(0, B[1]),
-            A[2] * self.half_shiftp(1, B[0]) - A[0] * self.half_shiftp(1, B[2]),
-            A[0] * self.half_shiftp(2, B[1]) - A[1] * self.half_shiftp(2, B[0])
+            A[1] * 0.5 * (B[2] + np.roll(B[2], -1, axis=0)) - A[2] * 0.5 * (B[1] + np.roll(B[1], -1, axis=0)),
+            A[2] * 0.5 * (B[0] + np.roll(B[0], -1, axis=1)) - A[0] * 0.5 * (B[2] + np.roll(B[2], -1, axis=1)),
+            A[0] * 0.5 * (B[1] + np.roll(B[1], -1, axis=2)) - A[1] * 0.5 * (B[0] + np.roll(B[0], -1, axis=2))
         ])
 
     # forward difference
@@ -397,43 +387,34 @@ class Grid:
         self.E += dt * (self.curlp(self.B) - self.J)
         self.B += dt * (-self.curlm(self.E))
 
-        self.EcBc_initialized = False  # now that E and B have changed, Ec and Bc have to be recomputed
-
-    # compute the centered version
-    def compute_EB_centered(self):
-        # compute the centered electric field
-        self.Ec[0] = self.half_shiftp(0, self.E[0])
-        self.Ec[1] = self.half_shiftp(1, self.E[1])
-        self.Ec[2] = self.half_shiftp(2, self.E[2])
-
-        # compute the centered magnetic field
-        self.Bc[0] = self.half_shiftp(1, self.half_shiftp(2, self.B[0]))
-        self.Bc[1] = self.half_shiftp(2, self.half_shiftp(0, self.B[1]))
-        self.Bc[2] = self.half_shiftp(0, self.half_shiftp(1, self.B[2]))
-
-        self.EcBc_initialized = True
-
     # interpolate electric and magnetic fields to a desired point (does not have to lie on the grid)
     # using the form factor of the super-particles
     def get_EB_at(self, R):
         assert isinstance(R, np.ndarray) and R.shape == (3,)
-        assert self.EcBc_initialized  # need to call compute_EB_centered beforehand
 
         (xk, yk, zk) = R * self.k0 - 1/2  # subtract 1/2 because charge density is defined in the middle of a cell
         (i, j, k) = tuple(map(round, (xk, yk, zk)))
         (disp_x, disp_y, disp_z) = (xk - i, yk - j, zk - k)
 
-        # compute the form factor array
+        # initialize the form factor array and modify it according to the way described in the writeup
+        # to shift its balancing by (-1/2, -1/2, -1/2)
         S = self.form_factor.get_array(disp_x, disp_y, disp_z)
+        S = np.pad(S, pad_width=((1, 1), (1, 1), (1, 1)), mode='constant', constant_values=0)  # pad with zeros outside
+        #S = 0.5 * (S + np.roll(S, 1, axis=0))  # shift x centering by -1/2
+        #S = 0.5 * (S + np.roll(S, 1, axis=1))  # shift y centering by -1/2
+        #S = 0.5 * (S + np.roll(S, 1, axis=2))  # shift z centering by -1/2
 
-        g = self.form_factor.g  # support radius of the super-particle form factor
-        return (np.array([  # dot product of the centered electric field with the form factor
-            wraparound_array_dot(self.Ec[0], S, [i - g, j - g, k - g]),
-            wraparound_array_dot(self.Ec[1], S, [i - g, j - g, k - g]),
-            wraparound_array_dot(self.Ec[2], S, [i - g, j - g, k - g])
+        g = self.form_factor.g
+        return (np.array([
+            wraparound_array_dot(self.E[0], 0.5 * (S + np.roll(S, 1, axis=0)), [i - g - 1, j - g - 1, k - g - 1]),
+            wraparound_array_dot(self.E[1], 0.5 * (S + np.roll(S, 1, axis=1)), [i - g - 1, j - g - 1, k - g - 1]),
+            wraparound_array_dot(self.E[2], 0.5 * (S + np.roll(S, 1, axis=2)), [i - g - 1, j - g - 1, k - g - 1])
+            #wraparound_array_dot(self.E[0], S, [i - g - 1, j - g - 1, k - g - 1]),
+            #wraparound_array_dot(self.E[1], S, [i - g - 1, j - g - 1, k - g - 1]),
+            #wraparound_array_dot(self.E[2], S, [i - g - 1, j - g - 1, k - g - 1])
         ]),
-        np.array([  # dot product of the centered magnetic field with the form factor
-            wraparound_array_dot(self.Bc[0], S, [i - g, j - g, k - g]),
-            wraparound_array_dot(self.Bc[1], S, [i - g, j - g, k - g]),
-            wraparound_array_dot(self.Bc[2], S, [i - g, j - g, k - g])
+        np.array([
+            wraparound_array_dot(self.B[0], S, [i - g - 1, j - g - 1, k - g - 1]),
+            wraparound_array_dot(self.B[1], S, [i - g - 1, j - g - 1, k - g - 1]),
+            wraparound_array_dot(self.B[2], S, [i - g - 1, j - g - 1, k - g - 1])
         ]))

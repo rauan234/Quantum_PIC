@@ -57,12 +57,11 @@ class Simulation:
         assert self.rho_J_initialized
 
         self.grid.set_semistatic_init_conds()
-        self.grid.compute_EB_centered()
 
         self.E_B_initialized = True
 
     # do one interation of the PIC loop
-    def make_step(self, dt, pusher='vay'):
+    def make_step(self, dt):
         assert self.rho_J_initialized and self.E_B_initialized
 
         # currently:
@@ -84,7 +83,7 @@ class Simulation:
             # making ptc = (q, R_{t+1}, v_{t+1}),
             # where (IMPORTANT) R_{t+1} = R_t + dt * v_{t+1}, otherwise cannot guarantee charge conservation
             R0 = ptc.R.copy()
-            ptc.vay_push(dt, E, B)
+            ptc.push(dt, E, B)
             qR0R1list.append((ptc.q, R0, ptc.R))
         # currently:
         # quantity  time
@@ -108,9 +107,7 @@ class Simulation:
         # ptc.R     1
         # ptc.v     1
 
-        # evolve the electric and magnetic fields
         self.grid.evolve_fields(dt)
-        self.grid.compute_EB_centered()
         # currently:
         # quantity  time
         # g.rho     1

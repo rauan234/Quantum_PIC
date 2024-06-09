@@ -121,29 +121,29 @@ def multiple_dots_example():
 
 def particle_animation():
     # Define the number of frames for the animation
-    num_frames = 650
+    num_frames = 150
 
-    frame_rate = 150  # Frames per second
+    frame_rate = 50  # Frames per second
     interval = 1000 // frame_rate
 
     # initialize a grid
-    (N1, N2, N3) = (40, 40, 40)
+    (N1, N2, N3) = (10, 10, 10)
     (xsize, ysize, zsize) = (1., 1., 1.)
     g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
 
     # initialize some particles with zero total charge
     nparticles = 2
     center = np.array([xsize / 2, ysize / 2, zsize / 2])
-    R = np.array([0.1, 0., 0.])
-    v = np.array([0, 0.19, 0])
+    R = np.array([0.2, 0.1, 0])
+    v = np.array([0, 0, 0])
     particles = [
-        Particle(1.,  0.5, center + R, v=v),  # np.array([0.1, ysize/2, zsize/2])),
-        Particle(1., -0.5, center - R, v=-v)  # np.array([xsize/2, 0.1, zsize/2]))
+        Particle(1., 1., center + R, v=v),  # np.array([0.1, ysize/2, zsize/2])),
+        Particle(1., -1., center - R, v=-v)  # np.array([xsize/2, 0.1, zsize/2]))
     ]
     qlist = [ptc.q for ptc in particles]  # store the particles' charges
 
     # pick a time step
-    dt = 0.5 * g.max_time_step
+    dt = 0.3 * g.max_time_step
 
     # initialize the simulation
     sim = Simulation(g, particles)
@@ -183,14 +183,14 @@ def particle_animation():
     ani = animation.FuncAnimation(fig, update, frames=num_frames, init_func=init, blit=True, interval=interval)
 
     # Save the animation as a GIF
-    ani.save('merger_animation_1.gif', writer='pillow')
+    ani.save('circle_animation.gif', writer='pillow')
 
     # Display the GIF
     plt.show()
 
 
 def main():
-    particle_animation()
+    #particle_animation()
 
     np.set_printoptions(suppress=True, precision=5)
     np.random.seed(0)
@@ -223,12 +223,12 @@ def main():
     intg_test_1()
     intg_test_2()
     intg_test_3()
-    intg_test_4()
-    intg_test_5()
+    #intg_test_4()
+    #intg_test_5()
 
     #soft_test_0()
     #soft_test_1()
-    #soft_test_2()
+    soft_test_2()
     #soft_test_3()
 
     #input('Press ENTER to complete')

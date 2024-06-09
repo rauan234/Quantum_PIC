@@ -368,7 +368,7 @@ def unit_test_10():
 
 
 # test if the Vay particle pusher works correctly on a specific example
-# @test: Particle.vay_push
+# @test: Particle.push
 def unit_test_11():
     print('-- unit test 11 --')
 
@@ -385,7 +385,7 @@ def unit_test_11():
 
     # push particle
     ptc = Particle(m, q, R0, v=v)
-    ptc.vay_push(dt, E, B)
+    ptc.push(dt, E, B)
 
     # test that even though R0 and v were passed to the particle init function, they were not modified
     assert np.max(np.abs(R0 - np.array([8.3, -2.7, 0.5]))) < 1e-10
@@ -400,7 +400,7 @@ def unit_test_11():
 
 
 # test if the Vay particle pusher works correctly on an example of a very fast particle and strong E, B
-# @test: Particle.vay_push
+# @test: Particle.push
 def unit_test_12():
     print('-- unit test 12 --')
 
@@ -417,7 +417,7 @@ def unit_test_12():
 
     # push particle
     ptc = Particle(m, q, R0, v=v)
-    ptc.vay_push(dt, E, B)
+    ptc.push(dt, E, B)
 
     # test that even though R0 and v were passed to the particle init function, they were not modified
     assert np.max(np.abs(R0 - np.array([190, 2.87, 0.354]))) < 1e-10
@@ -432,7 +432,7 @@ def unit_test_12():
 
 
 # test if the velocity remains unchanged if E + v x B = 0
-# @test: Particle.vay_push
+# @test: Particle.push
 def unit_test_13():
     print('-- unit test 13 --')
 
@@ -449,7 +449,7 @@ def unit_test_13():
 
     # push particle
     ptc = Particle(m, q, R0, v=v)
-    ptc.vay_push(dt, E, B)
+    ptc.push(dt, E, B)
 
     # check if the result matches what is expected
     # (see Mathematica notebook for the calculation)
@@ -460,7 +460,7 @@ def unit_test_13():
 
 
 # test that the gyroradius for precession in a constant magnetic field is correctly predicted
-# @test: Particle.vay_push
+# @test: Particle.push
 def unit_test_14():
     print('-- unit test 14 --')
 
@@ -482,10 +482,10 @@ def unit_test_14():
 
     # initialize the particle and push it by four time steps
     ptc = Particle(m, q, R0, v=v)
-    ptc.vay_push(dt, E, B)
-    ptc.vay_push(dt, E, B)
-    ptc.vay_push(dt, E, B)
-    ptc.vay_push(dt, E, B)
+    ptc.push(dt, E, B)
+    ptc.push(dt, E, B)
+    ptc.push(dt, E, B)
+    ptc.push(dt, E, B)
 
     # check if the result matches what is expected
     # (see Mathematica notebook for the calculation)
@@ -495,10 +495,10 @@ def unit_test_14():
     assert np.max(np.abs(ptc.v - v_expected)) < 1e-10
 
     # check that after eight time steps, the particle returns to the initial configuration
-    ptc.vay_push(dt, E, B)
-    ptc.vay_push(dt, E, B)
-    ptc.vay_push(dt, E, B)
-    ptc.vay_push(dt, E, B)
+    ptc.push(dt, E, B)
+    ptc.push(dt, E, B)
+    ptc.push(dt, E, B)
+    ptc.push(dt, E, B)
     assert abs(np.linalg.norm(ptc.R)) < 1e-10
     assert np.max(np.abs(ptc.v - v)) < 1e-10
 
@@ -530,7 +530,6 @@ def unit_test_15():
 
     # set the initial conditions
     g.set_semistatic_init_conds()
-    g.compute_EB_centered()
 
     # interpolate the fields at the position of the particle; the result should be zero
     (E, B) = g.get_EB_at(R)
@@ -554,7 +553,6 @@ def unit_test_16():
     my_B = np.array([-9, 3, 20])
     g.E[:, :, :, :] = my_E[:, np.newaxis, np.newaxis, np.newaxis]
     g.B[:, :, :, :] = my_B[:, np.newaxis, np.newaxis, np.newaxis]
-    g.compute_EB_centered()
 
     # pick some position and interpolate
     R = np.array([1.5, 9.3, 8.127])
@@ -913,7 +911,6 @@ def intg_test_3():
             assert np.linalg.norm(F - F_expected) < 1e-10
 
 
-# test that the time difference of the Poynting vector is minus the Lorentz force density plus a field gradient term
 def intg_test_4():
     print('-- integration test 4 --')
 
@@ -922,66 +919,42 @@ def intg_test_4():
     (xsize, ysize, zsize) = (1., 3., 8.)
     g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
 
-    # initialize some particles with zero total charge
-    particles = [random_particle((xsize, ysize, zsize)) for i in range(10)]
-    particles[-1].q = -sum(map(lambda ptc: ptc.q, particles[:-1]))
+    # initialize zero particles
+    particles = []
 
     # initialize the simulation
     sim = Simulation(g, particles)
     sim.initialize_charges()
     sim.set_semistatic_init_conds()
 
-    # initialize some particles with zero total charge
-    particles = [random_particle((xsize, ysize, zsize)) for i in range(10)]
-    particles[-1].q = -sum(map(lambda ptc: ptc.q, particles[:-1]))
-
-    # initialize the simulation
-    sim = Simulation(g, particles)
-    sim.initialize_charges()
-    sim.set_semistatic_init_conds()
+    # HACKY: initialize E and B to some divergenceless random fields
+    g.E = g.make_divp_zero(np.random.rand(3, N1, N2, N3))
+    g.B = g.make_divm_zero(np.random.rand(3, N1, N2, N3))
 
     # pick a time step
-    dt = (0.01 + 0.98 * random.random()) * g.max_time_step
+    dt = 0.5 * g.max_time_step
 
-    # initialize the Poynting vector field to a null value
-    S = np.zeros((3, N1, N2, N3))
+    S = None
 
     # run the simulation for 10 time steps
     for iteration in range(10):
-        # record some quantities from the previous cycle
-        rho_old = g.rho.copy()  # charge density
-        E_old = g.E.copy()      # electric field
-        Ec_old = g.Ec.copy()    # electric field, centered
-        B_old = g.B.copy()      # magnetic field
-        S_old = S               # Poynting vector
+        B_old = g.B.copy()
+        S_old = S
 
-        # run the simulation for one time step
         sim.make_step(dt)
 
-        # compute the Poynting vector everywhere on the grid
-        S = g.ccp(g.E, B_old)
-
-        # after the initial time step, compare S to S_old
+        #S = g.ccp(g.E, B_old)
+        S = g.ccp(g.E, g.curlm(g.E))
         if iteration > 0:
             dSdt = (S - S_old) / dt
-
-            # compute a certain term which is the gradient of a certain field quantity (see the writeup)
-            field_term = np.zeros((3, N1, N2, N3))
+            expected = np.zeros((3, N1, N2, N3))
             for i in range(3):
                 for j in range(3):
-                    field_term[i] -= 0.5 * g.pdm(i,
-                        E_old[j] * g.shiftp(i, E_old[j]) + g.shiftp(i, B_old[j])**2
-                    )
-                    field_term[i] += g.pdm(j,
-                        g.shiftp(j, E_old[j]) * g.half_shiftp(i, E_old[i]) +
-                        g.shiftp(j, B_old[i]) * g.half_shiftp(i, B_old[j])
-                    )
-
-            # compute the Lorentz force density
-            lorentz = rho_old * Ec_old + g.ccp(g.J, B_old)
-
-            # check that the time difference of the Poynting vector is what we expect
-            assert np.max(np.abs(dSdt - field_term + lorentz)) < 1e-10
+                    expected[i] -= g.pdm(j, g.shiftp(j, g.E[j]) * g.half_shiftp(i, g.E[i]))
+                    expected[i] += 0.25 * g.pdm(i, g.shiftp(i, g.E[j]) * g.E[j])
+                    expected[i] += 0.25 * g.pdp(i, g.shiftm(i, g.E[j]) * g.E[j])
+            print((S - expected)[0])
+            input()
 
 
 # check that the field induced by charge (q, R) at -R is the same as the field induced by (-q, -R) at R
@@ -1008,7 +981,6 @@ def intg_test_5():
 
     # compute E and B
     g.set_semistatic_init_conds()
-    g.compute_EB_centered()
 
     # extract E at R and -R
     E1 = g.get_EB_at(R)[0]
@@ -1020,10 +992,8 @@ def intg_test_5():
 
 # test if the field of two static charges is close to what we expect in the continuous case
 def soft_test_0():
-    # initialize a grid
     g = Grid((200, 200, 200), (1., 1., 1.), QuadraticSplineFF)
 
-    # initialize two particles of opposite charge
     q = 1.
     x = 0.1
     particles = [
@@ -1031,12 +1001,17 @@ def soft_test_0():
         Particle(1., -q, np.array([x, 0, 0]))
     ]  # a positive particle on the negative x axis and a negative particle on the positive x axis
 
-    # initialize the simulation
-    sim = Simulation(g, particles)
-    sim.initialize_charges()
-    sim.set_semistatic_init_conds()
+    dt = 0.1
 
-    # compare fields to expectation
+    # set initial conditions
+    g.refresh_charge()
+    for ptc in particles:
+        R0 = ptc.R.copy()
+        ptc.push_init(dt)
+        g.deposit_charge(ptc.q, R0, ptc.R, dt)
+    g.set_semistatic_init_conds()
+
+    # compare result to expectation
     (E, B) = g.get_EB_at(np.zeros(3))
     print('-- soft test 0 --')
     print('Expect:')
@@ -1050,10 +1025,9 @@ def soft_test_0():
 
 # test if can reproduce the magnetic field of a current-carrying loop
 def soft_test_1():
-    # initialize a grid
     g = Grid((200, 200, 200), (1., 1., 1.), QuadraticSplineFF)
 
-    # initialize the parameters of a ring of total charge Q, with its center at (0, 0, -h) and having radius R,
+    # a ring of total charge Q, with its center at (0, 0, -h) and having radius R,
     # rotating with angular velocity omega;
     # also there is an identical ring but with charge -Q and not rotating
     Q = 1.
@@ -1061,11 +1035,10 @@ def soft_test_1():
     h = 0.12
     omega = 4.5
 
-    # initialize the number of particles
+    # the number of
     N = 40
     q = Q / N
 
-    # create the ring from particles
     particles = [
         Particle(1., q, np.array([R * np.cos(th), R * np.sin(th), -h]),
                         np.array([-R * omega * np.sin(th), R * omega * np.cos(th), 0]))
@@ -1075,13 +1048,15 @@ def soft_test_1():
                         np.zeros(3))
     for th in 2 * np.pi / N * np.arange(0, N)]
 
-    # pick a time step
-    dt = 0.01 * g.max_time_step
+    dt = 0.0001
 
-    # initialize the simulation
-    sim = Simulation(g, particles)
-    sim.initialize_charges(dt)
-    sim.set_semistatic_init_conds()
+    # set initial conditions
+    g.refresh_charge()
+    for ptc in particles:
+        R0 = ptc.R.copy()
+        ptc.push_init(dt)
+        g.deposit_charge(ptc.q, R0, ptc.R, dt)
+    g.set_semistatic_init_conds()
 
     # compare result to expectation
     (E, B) = g.get_EB_at(np.zeros(3))
@@ -1095,12 +1070,12 @@ def soft_test_1():
     print('----')
 
 
-# test if the electrostatic field is collinear with the displacement vector
+# test if the electrostatic field is collinear with the displacement
 def soft_test_2():
     print('-- soft test 2 --')
 
     # initialize a grid
-    (N1, N2, N3) = (40, 40, 40)
+    (N1, N2, N3) = (10, 10, 10)
     (xsize, ysize, zsize) = (1., 1., 1.)
     (Dx, Dy, Dz) = (xsize / N1, ysize / N2, zsize / N3)
     g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
@@ -1120,7 +1095,6 @@ def soft_test_2():
 
         # compute E and B (and B will be zero because the particles are not moving)
         g.set_semistatic_init_conds()
-        g.compute_EB_centered()
         (E, B) = g.get_EB_at(R)
         return E
 
@@ -1134,35 +1108,32 @@ def soft_test_2():
             return np.linalg.norm(np.cross(E, R)) / np.linalg.norm(E) / np.linalg.norm(R)
 
     # Create a grid of points
-    x = np.linspace(-5, 5, 20)
-    y = np.linspace(-5, 5, 20)
+    x = np.linspace(-10, 10, 80)
+    y = np.linspace(-10, 10, 80)
     X, Y = np.meshgrid(x, y)
     f = np.vectorize(f)
     Z = f(X, Y)
 
-    print('Plot of non-collinearity of electrostatic force')
-    print('Numbers of grid points in each direction: (N1, N2, N3) =',  (N1, N2, N3))
-    print('Median non-collinearity within the region:', np.median(Z))
-    print('Mean:', np.mean(Z))
+    print('At R =', np.array([1.5 * Dx, 4 * Dy, 0]), ', E =', get_E_at_R(np.array([1.5 * Dx, 4 * Dy, 0])))
 
     # Plot the function
     plt.figure(figsize=(8, 8))
     plt.contourf(X, Y, Z, cmap='viridis')
     plt.colorbar(label='Value')
-    plt.xlabel('x / Dx')
-    plt.ylabel('y / Dy')
+    plt.xlabel('x')
+    plt.ylabel('y')
     plt.title('|E x R| / |E| / |R|')
     plt.gca().set_aspect('equal', adjustable='box')  # Ensure the aspect ratio is 1
     plt.show()
 
 
 # two particles of opposite charge and equal mass orbiting each other
-# @test: Grid.set_semistatic_init_conds, Grid.evolve_fields, Grid.deposit_charge, Particle.vay_push
+# @test: Grid.set_semistatic_init_conds, Grid.evolve_fields, Grid.deposit_charge, Particle.push
 def soft_test_3():
-    print('-- soft test 3 --')
+    print('-- soft test 2 --')
 
     # initialize a grid
-    (N1, N2, N3) = (80, 80, 80)
+    (N1, N2, N3) = (20, 20, 20)
     L = 1.
     (xsize, ysize, zsize) = (L, L, L)
     g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
@@ -1170,8 +1141,8 @@ def soft_test_3():
     # set up two particles which should orbit each other in a circle
     q = 0.5
     m = 1.
-    R_mag = L/8
-    v_mag = 0.75 * np.sqrt((q**2 / 4 / np.pi) / (4 * m * R_mag))  # the 0.75 factor is just put in empirically
+    R_mag = L/6
+    v_mag = np.sqrt((q**2 / 4 / np.pi) / (4 * m * R_mag))
     R = np.array([0, 1, 0]) * R_mag
     v = np.array([1, 0, 0]) * v_mag
     particles = [
@@ -1182,25 +1153,47 @@ def soft_test_3():
     # pick a time step which is not too large
     dt = min(0.1 * R_mag / v_mag, 0.5 * g.max_time_step)
 
-    # initialize the simulation
-
-    # initialize the simulation
-    sim = Simulation(g, particles)
-    sim.initialize_charges(dt)
-    sim.set_semistatic_init_conds()
+    # set initial conditions
+    g.refresh_charge()
+    for ptc in particles:
+        R0 = ptc.R.copy()
+        ptc.push_init(dt)
+        g.deposit_charge(ptc.q, R0, ptc.R, dt)
+    g.set_semistatic_init_conds()
 
     rlist = []
     xlist = []
     ylist = []
 
     # run the simulation for some number of time steps
-    for i in range(1000):
-        print(i)
+    for i in range(10000):
         rlist.append(np.linalg.norm(particles[0].R - particles[1].R) / 2 / R_mag)
         xlist.append((particles[0].R - particles[1].R)[0])
         ylist.append((particles[0].R - particles[1].R)[1])
+        # @pre: each particle is ptc = (q, R_t, v_t), and also g.rho is at time t and g.J at time t-1,
+        # and g.E and g.B are at time t
 
-        sim.make_step(dt)
+        # change the particles' momentum and position, recording their previous position
+        qR0R1list = []
+        for ptc in particles:
+            (E, B) = g.get_EB_at(ptc.R)
+
+            # IMPORTANT: first update velocity, then use this updated velocity to modify position
+            R0 = ptc.R.copy()
+            ptc.push(dt, E, B)
+            qR0R1list.append((ptc.q, R0, ptc.R))
+            # at this point, ptc = (q, R_{t+1}, v_{t+1}),
+            # where (IMPORTANT) R_{t+1} = R_t + dt * v_{t+1}, otherwise cannot guarantee charge conservation
+
+        # update charge and current densities, as well as field strengths
+        g.refresh_charge()
+        for (q, R0, R1) in qR0R1list:
+            g.deposit_charge(q, R0, R1, dt)
+        # at this point, g.rho is at time t+1 because computed using particles' positions at time t+1,
+        # an g.J is at time t
+
+        g.evolve_fields(dt)
+        # at this point, g.E and g.B are at time t+1
 
     plt.plot(rlist)
     plt.plot(xlist)

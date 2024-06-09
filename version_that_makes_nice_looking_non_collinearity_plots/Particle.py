@@ -33,23 +33,20 @@ class Particle:
             self.u = u.copy()
             self.compute_v()
 
-    # create a copy of this particle
     def copy(self):
         ptc = Particle(self.m, self.q, self.R)
         ptc.v = self.v.copy()
         ptc.u = self.u.copy()
         return ptc
 
-    # compute the reduced momentum p/m assuming the velocity v is known
     def compute_u(self):
         self.u = self.v / np.sqrt(1 - self.v[0]**2 - self.v[1]**2 - self.v[2]**2)
 
-    # compute the velocity v assuming the reduced momentum p/m is known
     def compute_v(self):
         self.v = self.u / np.sqrt(1 + self.u[0]**2 + self.u[1]**2 + self.u[2]**2)
 
     # the Vay particle pusher
-    def vay_push(self, dt, E, B):
+    def push(self, dt, E, B):
         g = self.q * dt / self.m
 
         u_pr = self.u + g * (E + 0.5 * np.cross(self.v, B))  # u'            vector
@@ -65,13 +62,6 @@ class Particle:
 
         self.u = s * (u_pr + np.dot(u_pr, t) * t + np.cross(u_pr, t))
         self.v = self.u / gamma_new
-        self.R += dt * self.v
-
-    # the xc particle pusher, described in the writeup
-    def xc_push(self, dt):
-        self.u += 0  # MODIFY THIS
-
-        self.compute_v()
         self.R += dt * self.v
 
 
