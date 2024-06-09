@@ -734,8 +734,42 @@ def unit_test_21():
     assert np.max(np.abs(g.divm(v2))) < 1e-10
 
 
-# test that Simulation.make_step maintains charge conservation and Maxwell's equations,
-# thus testing the field part of the entire PIC loop
+# test that Grid.get_magnetic_force correctly computes the magnetic force acting on a particle
+# @test: Grid.get_magnetic_force
+def unit_test_22():
+    print('-- unit test 22 --')
+
+    # initialize a grid
+    (N1, N2, N3) = (10, 10, 10)
+    (xsize, ysize, zsize) = (1., 1., 1.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
+
+    # pick the particle's initial and final position, as well as the time step
+    R0 = np.array([0.1, 0.2, 0.3])     # position at time t0
+    R1 = np.array([0.11, 0.22, 0.35])  # position at time t1
+    dt = 0.1
+
+    # pick the particle's charge
+    q = 1.
+
+    # deposit charges, so that g.rho is now at time t1 and g.J is at time t0
+    g.refresh_charge()
+    g.deposit_charge(q, R0, R1, dt)
+
+    # HACKY: make B some divergenceless vector field
+    # this is to be interpreted as the field at time t0
+    B0 = g.make_divm_zero(np.random.rand(3, N1, N2, N3))
+
+    # compute the magnetic component of the Lorentz force acting on the particle in two different ways
+    F1 = g.DV * np.sum(g.ccp(g.J, B0), axis=(1,2,3))
+    F2 = g.get_magnetic_force(B0, q, R0, R1, dt)
+
+    # assert that the two calculations give the same result
+    assert np.linalg.norm(F1 - F2) < 1e-10
+
+
+# test that Simulation.vay_make_step maintains charge conservation and Maxwell's equations,
+# thus testing the field part of the entire PIC loop with the Vay pusher
 def intg_test_0():
     print('-- integration test 0 --')
 
@@ -768,7 +802,7 @@ def intg_test_0():
         # make one time step, so that
         # now g.rho, g.E, g.B, ptc.R, ptc.v are at time 1,
         # and g.J is at time 0
-        sim.make_step(dt)
+        sim.vay_make_step(dt)
 
         # check that Maxwell's equations are satisfied
         assert np.max(np.abs(g.divm(g.B))) < 1e-10                                # div^- B = 0
@@ -805,9 +839,9 @@ def intg_test_1():
     sim.initialize_charges()
     sim.set_semistatic_init_conds()
 
-    # run for 10 time steps
+    # run for 10 time steps with the Vay pusher
     for i in range(10):
-        sim.make_step(dt)
+        sim.vay_make_step(dt)
 
     # check that the particles haven't moved
     assert np.max(np.abs(particles[0].R - Ra)) < 1e-10
@@ -846,7 +880,7 @@ def intg_test_2():
         B_old = g.B.copy()
 
         # two equivalent options are sim.make_step(dt) and g.evolve_fields(dt)
-        sim.make_step(dt)
+        sim.vay_make_step(dt)
 
         # if enter plist.append(g.DV * np.sum(g.cross(g.E, B_old), axis=(1, 2, 3))) instead, the test fails
         plist.append(g.DV * np.sum(g.ccp(g.E, B_old), axis=(1,2,3)))
@@ -891,11 +925,10 @@ def intg_test_3():
         p_old = p.copy()
 
         # evolve the field by some time step
-        sim.make_step(dt)
+        sim.vay_make_step(dt)
 
         # compute the current field momentum
         p = g.DV * np.sum(g.ccp(g.E, B_old), axis=(1,2,3))
-        S = g.ccp(g.E, B_old)
 
         # after the initial time step, compare p to p_old
         if i > 0:
@@ -956,7 +989,7 @@ def intg_test_4():
         S_old = S               # Poynting vector
 
         # run the simulation for one time step
-        sim.make_step(dt)
+        sim.vay_make_step(dt)
 
         # compute the Poynting vector everywhere on the grid
         S = g.ccp(g.E, B_old)
@@ -1016,6 +1049,95 @@ def intg_test_5():
 
     # assert that the field induced by (-q, -R) at R is the same as the field induced by (q, R) at -R
     assert np.linalg.norm(E1 - E2) < 1e-10
+
+
+# repeat intg_test_0 with the xc pusher
+def intg_test_6():
+    print('-- integration test 6 --')
+
+    # initialize a grid
+    (N1, N2, N3) = (10, 10, 10)
+    (xsize, ysize, zsize) = (1., 1., 1.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
+
+    # initialize some particles with zero total charge
+    particles = [random_particle((xsize, ysize, zsize)) for i in range(10)]
+    particles[-1].q = -sum(map(lambda ptc: ptc.q, particles[:-1]))
+
+    # initialize the simulation
+    sim = Simulation(g, particles)
+    sim.initialize_charges()
+    sim.set_semistatic_init_conds()
+
+    # run the simulation for 10 time steps
+    for i in range(10):
+        # @pre: g.rho, g.E, g.B, ptc.R, ptc.v are at time 0,
+        # and g.J is at time -1
+        rho_old = g.rho.copy()
+        E_old = g.E.copy()
+        B_old = g.B.copy()
+
+        # pick a random time step which is not too large
+        # NOTE: the time step is allowed to vary in simulations, so we randomize it
+        dt = (0.01 + 0.98 * random.random()) * g.max_time_step
+
+        # make one time step, so that
+        # now g.rho, g.E, g.B, ptc.R, ptc.v are at time 1,
+        # and g.J is at time 0
+        sim.xc_make_step(dt)
+
+        # check that Maxwell's equations are satisfied
+        assert np.max(np.abs(g.divm(g.B))) < 1e-10                                # div^- B = 0
+        assert np.max(np.abs(g.divp(g.E) - g.rho)) < 1e-10                        # div^+ E = rho
+        assert np.max(np.abs((g.B - B_old) / dt + g.curlm(g.E))) < 1e-10          # d_t^- B + curl^- E = 0
+        assert np.max(np.abs((g.E - E_old) / dt - g.curlp(B_old) + g.J)) < 1e-10  # d_t^+ E - curl^+ B = -J
+
+        # check charge conservation
+        assert np.max(np.abs((g.rho - rho_old) / dt + g.divp(g.J))) < 1e-10  # (rho_1 - rho_0) / dt + div^+ J_0 = 0
+
+
+# test that the xc pusher preserves total momentum
+def intg_test_7():
+    print('-- integration test 7 --')
+
+    # initialize a grid
+    (N1, N2, N3) = (10, 10, 10)
+    (xsize, ysize, zsize) = (1., 1., 1.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
+
+    # initialize some particles with zero total charge
+    particles = [random_particle((xsize, ysize, zsize)) for i in range(10)]
+    particles[-1].q = -sum(map(lambda ptc: ptc.q, particles[:-1]))
+
+    # initialize the simulation
+    sim = Simulation(g, particles)
+    sim.initialize_charges()
+    sim.set_semistatic_init_conds()
+
+    # initialize the field momentum to a null value
+    p = np.zeros(3)
+
+    # pick a time step
+    dt = (0.01 + 0.98 * random.random()) * g.max_time_step
+
+    # run the simulation for 10 time steps
+    for i in range(10):
+        B_old = g.B.copy()
+
+        # store the old field momentum
+        p_old = p.copy()
+
+        # evolve the field by one time step
+        sim.xc_make_step(dt)
+
+        # compute the total field and particles' momentum
+        p = g.DV * np.sum(g.ccp(g.E, B_old), axis=(1,2,3)) + sum([ptc.get_total_momentum() for ptc in particles])
+
+        # after the initial time step, compare p to p_old
+        if i > 0:
+            # check that dp/dt is zero
+            F = (p - p_old) / dt
+            assert np.linalg.norm(F) < 1e-10
 
 
 # test if the field of two static charges is close to what we expect in the continuous case

@@ -23,6 +23,8 @@ class Particle:
         self.v = np.zeros(3)  # velocity
         self.u = np.zeros(3)  # reduced momentum, u = p / m = gamma v
 
+        self.delta = np.zeros(3)  # the "momentum debt," used in the xc pusher; see the writeup
+
         if not isinstance(v, type(None)):
             assert isinstance(v, np.ndarray) and v.shape == (3,)
             assert np.linalg.norm(v) < 1.  # going slower than light
@@ -68,11 +70,19 @@ class Particle:
         self.R += dt * self.v
 
     # the xc particle pusher, described in the writeup
-    def xc_push(self, dt):
-        self.u += 0  # MODIFY THIS
+    def xc_push(self, dt, E):
+        self.u += dt * self.q * E / self.m
+        self.u += self.delta / self.m
 
         self.compute_v()
         self.R += dt * self.v
+
+    # part of the xc particle pushing mechanism; see the writeup
+    def update_momentum_debt(self, dt, F):
+        self.delta = dt * F
+
+    def get_total_momentum(self):
+        return self.m * self.u + self.delta
 
 
 # create a randomized particle

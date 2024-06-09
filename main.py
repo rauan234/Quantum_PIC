@@ -155,7 +155,7 @@ def particle_animation():
         [ptc.R.copy() for ptc in particles]
     ]
     for i in range(num_frames - 1):
-        sim.make_step(dt)
+        sim.xc_make_step(dt)
         pos_list.append([ptc.R.copy() for ptc in particles])
 
     # Create a figure and axis
@@ -190,9 +190,9 @@ def particle_animation():
 
 
 def main():
-    particle_animation()
+    #particle_animation()
 
-    np.set_printoptions(suppress=True, precision=5)
+    np.set_printoptions(suppress=True, precision=2)
     np.random.seed(0)
     random.seed(0)
 
@@ -218,6 +218,7 @@ def main():
     unit_test_19()
     unit_test_20()
     unit_test_21()
+    unit_test_22()
 
     intg_test_0()
     intg_test_1()
@@ -225,6 +226,8 @@ def main():
     intg_test_3()
     intg_test_4()
     intg_test_5()
+    intg_test_6()
+    intg_test_7()
 
     #soft_test_0()
     #soft_test_1()

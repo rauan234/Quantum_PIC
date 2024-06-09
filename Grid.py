@@ -89,10 +89,11 @@ def wraparound_array_dot(A, B, ind):
     assert isinstance(ind, list) and all(map(lambda x: isinstance(x, int), ind))
     assert isinstance(A, np.ndarray) and isinstance(B, np.ndarray)
 
-    # check that B is smaller than or same size as A in every dimension
+    d = A.ndim  # dimension of A and B
+    assert A.ndim == B.ndim  # A and B must be of the same dimensions
+
     (sa, sb) = (A.shape, B.shape)
-    d = len(sa)  # dimension of A and B
-    assert len(sa) == len(sb) and all([sb[i] <= sa[i] for i in range(d)])
+    assert all([sb[i] <= sa[i] for i in range(d)])  # B must be smaller than or same as A in every dimension
 
     # mod out ind by the shape of A
     ind = ind.copy()
@@ -437,3 +438,71 @@ class Grid:
             wraparound_array_dot(self.Bc[1], S, [i - g, j - g, k - g]),
             wraparound_array_dot(self.Bc[2], S, [i - g, j - g, k - g])
         ]))
+
+    # compute the magnetic component of the Lorentz force acting on a particle of charge q
+    # as it moves from position R0 at time t0 to position R1 at time t1 = t0 + dt
+    # in magnetic field B0, which is at time t0
+    def get_magnetic_force(self, B0, q, R0, R1, dt):
+        # initial position, divided by grid cell size;
+        # the closest grid point; and
+        # the difference between the position and the closest grid point, respectively
+        (x0k, y0k, z0k) = R0 * self.k0 - 1/2  # subtract 1/2 because charge density is defined in the middle of a cell
+        (i0, j0, k0) = tuple(map(round, (x0k, y0k, z0k)))
+        (disp_x0, disp_y0, disp_z0) = (x0k - i0, y0k - j0, z0k - k0)
+
+        # same, but for final position
+        (x1k, y1k, z1k) = R1 * self.k0 - 1/2  # subtract 1/2 because charge density is defined in the middle of a cell
+        (i1, j1, k1) = tuple(map(round, (x1k, y1k, z1k)))
+        (disp_x1, disp_y1, disp_z1) = (x1k - i1, y1k - j1, z1k - k1)
+
+        # the change in the location of the nearest grid cell
+        (Di, Dj, Dk) = (i1 - i0, j1 - j0, k1 - k0)
+
+        # compute the form factors of the particle over eight different positions
+        g = self.form_factor.g                                    # support radius of the form factor
+        S = np.zeros((2, 2, 2, 2 * g + 3, 2 * g + 3, 2 * g + 3))  # form factor array
+        for a in (0, 1):
+            for b in (0, 1):
+                for c in (0, 1):
+                    S_raw = self.form_factor.get_array(
+                        disp_x0 if a == 0 else disp_x1,
+                        disp_y0 if b == 0 else disp_y1,
+                        disp_z0 if c == 0 else disp_z1
+                    )  # np array of dimension (2 * g + 1)^3
+                    pos_x = 1 if a == 0 else 1 + Di
+                    pos_y = 1 if b == 0 else 1 + Dj
+                    pos_z = 1 if c == 0 else 1 + Dk
+                    S[a, b, c, pos_x:pos_x+2*g+1, pos_y:pos_y+2*g+1, pos_z:pos_z+2*g+1] += S_raw
+
+        # compute Esirkepov's W vector
+        Wx = ((S[1, 0, 0] - S[0, 0, 0]) / 3. + (S[1, 1, 0] - S[0, 1, 0]) / 6.
+              + (S[1, 0, 1] - S[0, 0, 1]) / 6. + (S[1, 1, 1] - S[0, 1, 1]) / 3.)
+        Wy = ((S[0, 1, 0] - S[0, 0, 0]) / 3. + (S[1, 1, 0] - S[1, 0, 0]) / 6.
+              + (S[0, 1, 1] - S[0, 0, 1]) / 6. + (S[1, 1, 1] - S[1, 0, 1]) / 3.)
+        Wz = ((S[0, 0, 1] - S[0, 0, 0]) / 3. + (S[1, 0, 1] - S[1, 0, 0]) / 6.
+              + (S[0, 1, 1] - S[0, 1, 0]) / 6. + (S[1, 1, 1] - S[1, 1, 0]) / 3.)
+
+        # compute the currents induced by the motion of the particle
+        Jx = -q * self.one_over_dV * self.Dx / dt * np.cumsum(Wx, axis=0)
+        Jy = -q * self.one_over_dV * self.Dy / dt * np.cumsum(Wy, axis=1)
+        Jz = -q * self.one_over_dV * self.Dz / dt * np.cumsum(Wz, axis=2)
+
+        #J = np.zeros((3,) + self.mesh_size)
+        #wraparound_array_add(J[0], Jx, [i0 - g, j0 - g - 1, k0 - g - 1])
+        #wraparound_array_add(J[1], Jy, [i0 - g - 1, j0 - g, k0 - g - 1])
+        #wraparound_array_add(J[2], Jz, [i0 - g - 1, j0 - g - 1, k0 - g])
+        #print(J[0, 2])
+
+        #return self.DV * np.sum(self.ccp(J, B0), axis=(1,2,3))
+
+        # compute and return the Lorentz force
+        return self.DV * np.array([
+            wraparound_array_dot(self.half_shiftp(0, B0[2]), Jy, [i0 - g - 1, j0 - g, k0 - g - 1]) -
+            wraparound_array_dot(self.half_shiftp(0, B0[1]), Jz, [i0 - g - 1, j0 - g - 1, k0 - g]),
+
+            wraparound_array_dot(self.half_shiftp(1, B0[0]), Jz, [i0 - g - 1, j0 - g - 1, k0 - g]) -
+            wraparound_array_dot(self.half_shiftp(1, B0[2]), Jx, [i0 - g, j0 - g - 1, k0 - g - 1]),
+
+            wraparound_array_dot(self.half_shiftp(2, B0[1]), Jx, [i0 - g, j0 - g - 1, k0 - g - 1]) -
+            wraparound_array_dot(self.half_shiftp(2, B0[0]), Jy, [i0 - g - 1, j0 - g, k0 - g - 1])
+        ])
