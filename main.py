@@ -121,19 +121,20 @@ def multiple_dots_example():
 
 def particle_animation():
     # Define the number of frames for the animation
-    num_frames = 650
+    num_frames = 750
 
-    frame_rate = 150  # Frames per second
+    frame_rate = 100  # Frames per second
     interval = 1000 // frame_rate
 
     # initialize a grid
     (N1, N2, N3) = (40, 40, 40)
     (xsize, ysize, zsize) = (1., 1., 1.)
+    (Dx, Dy, Dz) = (xsize / N1, ysize / N2, zsize / N3)
     g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
 
     # initialize some particles with zero total charge
     nparticles = 2
-    center = np.array([xsize / 2, ysize / 2, zsize / 2])
+    center = np.array([xsize / 2, ysize / 2, 0])
     R = np.array([0.1, 0., 0.])
     v = np.array([0, 0.19, 0])
     particles = [
@@ -145,6 +146,8 @@ def particle_animation():
     # pick a time step
     dt = 0.5 * g.max_time_step
 
+    print('Initializing')
+
     # initialize the simulation
     sim = Simulation(g, particles)
     sim.initialize_charges(dt)
@@ -154,9 +157,37 @@ def particle_animation():
     pos_list = [
         [ptc.R.copy() for ptc in particles]
     ]
+
+    def get_field_energy_array():
+        #arr = np.zeros((N1, N2))
+        #for i in range(N1):
+        #    for j in range(N2):
+        #        arr[i, j] = np.tanh(2 * (np.linalg.norm(g.E[:, i, j, 0]) ** 2 + np.linalg.norm(g.B[:, i, j, 0]) ** 2))
+        #return np.transpose(arr)
+        E = g.E[:, :, :, 0]
+        B = g.B[:, :, :, 0]
+        #return np.transpose(np.tanh(0.5 * np.sum(E**2 + B**2, axis=0)))
+        #S = np.array([
+        #    E[1] * B[2] - E[2] * B[1],
+        #    E[2] * B[0] - E[0] * B[2],
+        #    E[0] * B[1] - E[1] * B[2]
+        #])
+        #return np.transpose(np.tanh(0.5 * np.sum(S**2, axis=0)))
+        #return np.transpose(np.log(1 + 3 * np.sum(E**2 + B**2, axis=0)))
+        #return np.transpose(np.tanh(np.sqrt(np.sum(E**2 + B**2, axis=0))))
+        return np.transpose(np.arctan(1.5 * np.sum(E**2 + B**2, axis=0)))
+    field_energy_list = [
+        get_field_energy_array()
+    ]
+
+    print('Simulating')
     for i in range(num_frames - 1):
-        sim.xc_make_step(dt)
+        print(i)
+        sim.vay_make_step(dt)
         pos_list.append([ptc.R.copy() for ptc in particles])
+        field_energy_list.append(get_field_energy_array())
+
+    print('Drawing')
 
     # Create a figure and axis
     fig, ax = plt.subplots()
@@ -166,6 +197,23 @@ def particle_animation():
 
     dots = [ax.plot([], [], 'o', markersize=10)[0] for _ in range(nparticles)]
 
+    # Define the two-variable function f(x, y, t) that changes with time t
+    def f(xx, yy, t):
+        i = round(xx / Dx) % N1
+        j = round(yy / Dy) % N2
+        #return np.sin(x ** 2 + y ** 2 + t / 20)
+        return np.tanh(
+            np.linalg.norm(g.E[:, i, j, 0])**2 + np.linalg.norm(g.B[:, i, j, 0])**2
+        )
+    f = np.vectorize(f)
+
+    x = np.linspace(0, xsize - Dx, N1)
+    y = np.linspace(0, ysize - Dy, N2)
+    X, Y = np.meshgrid(x, y)
+    #Z = f(X, Y, 0)
+    Z = field_energy_list[0]
+    background = ax.imshow(Z, extent=[0, xsize, 0, ysize], origin='lower', cmap='viridis', alpha=0.5)
+
     def init():
         for (dot, q) in zip(dots, qlist):
             dot.set_data([], [])
@@ -173,11 +221,16 @@ def particle_animation():
         return dots
 
     def update(frame):
+        # Update the background
+        #Z = f(X, Y, frame)
+        Z = field_energy_list[frame]
+        background.set_array(Z)
+
         x_positions = [R[0] % xsize for R in pos_list[frame]]
         y_positions = [R[1] % ysize for R in pos_list[frame]]
         for i, dot in enumerate(dots):
             dot.set_data(x_positions[i], y_positions[i])
-        return dots
+        return dots + [background]
 
     # Create the animation
     ani = animation.FuncAnimation(fig, update, frames=num_frames, init_func=init, blit=True, interval=interval)
@@ -190,9 +243,9 @@ def particle_animation():
 
 
 def main():
-    #particle_animation()
+    particle_animation()
 
-    np.set_printoptions(suppress=True, precision=2)
+    '''np.set_printoptions(suppress=True, precision=2)
     np.random.seed(0)
     random.seed(0)
 
@@ -234,7 +287,7 @@ def main():
     #soft_test_2()
     #soft_test_3()
 
-    #input('Press ENTER to complete')
+    #input('Press ENTER to complete')'''
 
 
 if __name__ == '__main__':

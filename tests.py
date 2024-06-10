@@ -1322,7 +1322,7 @@ def soft_test_3():
         xlist.append((particles[0].R - particles[1].R)[0])
         ylist.append((particles[0].R - particles[1].R)[1])
 
-        sim.make_step(dt)
+        sim.vay_make_step(dt)
 
     plt.plot(rlist)
     plt.plot(xlist)
