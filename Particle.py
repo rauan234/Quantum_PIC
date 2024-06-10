@@ -42,11 +42,11 @@ class Particle:
         ptc.u = self.u.copy()
         return ptc
 
-    # compute the reduced momentum p/m assuming the velocity v is known
+    # compute the reduced momentum u = p/m assuming the velocity v is known
     def compute_u(self):
         self.u = self.v / np.sqrt(1 - self.v[0]**2 - self.v[1]**2 - self.v[2]**2)
 
-    # compute the velocity v assuming the reduced momentum p/m is known
+    # compute the velocity v assuming the reduced momentum u = p/m is known
     def compute_v(self):
         self.v = self.u / np.sqrt(1 + self.u[0]**2 + self.u[1]**2 + self.u[2]**2)
 

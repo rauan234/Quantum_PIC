@@ -768,6 +768,188 @@ def unit_test_22():
     assert np.linalg.norm(F1 - F2) < 1e-10
 
 
+# test that Journal correctly records particle data
+# @test: Journal.__init__, Journal.particle_push
+def unit_test_23():
+    print('-- unit test 23 --')
+
+    # initialize a journal
+    j = Journal()
+
+    # pick the number of time steps and the number of particles
+    nsteps = 100
+    nparticles = 20
+
+    my_particles_list = []
+    for i in range(nsteps):
+        # generate some random particles
+        particles = [random_particle((1., 1., 1.)) for _ in range(nparticles)]
+
+        # record in journal
+        j.record_particles(particles)
+
+        # record in my_particles_list
+        my_particles_list.append([])
+        for ptc in particles:
+            my_particles_list[-1].append(Particle(ptc.m, ptc.q, ptc.R, v=ptc.v))
+
+        # scramble the particles' data to make sure particles are copied into journal and not stored as pointers
+        for ptc in particles:
+            ptc.m += random.random()
+            ptc.q += random.random()
+            ptc.R += np.random.rand(3)
+            ptc.v += np.random.rand(3)
+            ptc.u += np.random.rand(3)
+
+    # check that the journal data has the right number of entries
+    assert len(j.particles_list) == nsteps
+
+    # compare journal entries with what's expected
+    for (particles1, particles2) in zip(j.particles_list, my_particles_list):
+        # for each time step, iterate through the particles and compare
+        for (ptc1, ptc2) in zip(particles1, particles2):
+            assert ptc1.m == ptc2.m
+            assert ptc1.q == ptc2.q
+            assert np.linalg.norm(ptc1.R - ptc2.R) < 1e-10
+            assert np.linalg.norm(ptc1.v - ptc2.v) < 1e-10
+            assert np.linalg.norm(ptc1.u - ptc2.u) < 1e-10
+
+
+# test that EverythingJournal correctly records particle and field data
+# @test: EverythingJournal.__init__, EverythingJournal.record_particles, EverythingJournal.record_fields
+def unit_test_24():
+    print('-- unit test 24 --')
+
+    # initialize a journal
+    j = EverythingJournal()
+
+    # pick the number of time steps, the number of particles, and the dimensions of field arrays
+    nsteps = 100
+    nparticles = 20
+    (N1, N2, N3) = (10, 20, 30)
+
+    my_particles_list = []
+    my_E_list = []
+    my_B_list = []
+    for i in range(nsteps):
+        # generate some random particles
+        particles = [random_particle((1., 1., 1.)) for _ in range(nparticles)]
+
+        # generate random E and B
+        E = np.random.rand(3, N1, N2, N3)
+        B = np.random.rand(3, N1, N2, N3)
+
+        # record in journal
+        j.record_particles(particles)
+        j.record_fields(E, B)
+
+        # record in my_particles_list
+        my_particles_list.append([])
+        for ptc in particles:
+            my_particles_list[-1].append(Particle(ptc.m, ptc.q, ptc.R, v=ptc.v))
+
+        # record in my_E_list, my_B_list
+        my_E_list.append(E.copy())
+        my_B_list.append(B.copy())
+
+        # scramble the particles' data to make sure particles are copied into journal and not stored as pointers
+        for ptc in particles:
+            ptc.m += random.random()
+            ptc.q += random.random()
+            ptc.R += np.random.rand(3)
+            ptc.v += np.random.rand(3)
+            ptc.u += np.random.rand(3)
+
+        # scramble the fields data to make sure particles are copied into journal and not stored as pointers
+        E += np.random.rand(3, N1, N2, N3)
+        B += np.random.rand(3, N1, N2, N3)
+
+    # check that journal data has the right number of entries
+    assert len(j.particles_list) == nsteps
+    assert len(j.E_list) == nsteps
+    assert len(j.B_list) == nsteps
+
+    # compare journal particle entries with what's expected
+    for (particles1, particles2) in zip(j.particles_list, my_particles_list):
+        # for each time step, iterate through the particles and compare
+        for (ptc1, ptc2) in zip(particles1, particles2):
+            assert ptc1.m == ptc2.m
+            assert ptc1.q == ptc2.q
+            assert np.linalg.norm(ptc1.R - ptc2.R) < 1e-10
+            assert np.linalg.norm(ptc1.v - ptc2.v) < 1e-10
+            assert np.linalg.norm(ptc1.u - ptc2.u) < 1e-10
+
+    # compare journal field entries with what's expected
+    for (E1, E2) in zip(j.E_list, my_E_list):
+        assert np.array_equal(E1, E2)
+    for (B1, B2) in zip(j.B_list, my_B_list):
+        assert np.array_equal(B1, B2)
+
+
+# test that Simulation.run with EverythingJournal woks correctly
+# @test: Simulation.run, EverythingJournal
+def unit_test_25():
+    print('-- unit test 25 --')
+
+    # initialize a journal
+    j = EverythingJournal()
+
+    # initialize simulation parameters
+    (N1, N2, N3) = (10, 10, 10)
+    (xsize, ysize, zsize) = (1., 1., 1.)
+    nparticles = 20
+    nsteps = 40
+
+    # initialize the simulation
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
+    dt = 0.2 * g.max_time_step
+    particles = [random_particle((xsize, ysize, zsize)) for _ in range(nparticles)]
+    particles[-1].q = -sum([ptc.q for ptc in particles[:-1]])  # make sure the total charge is zero
+    sim = Simulation(g, particles)
+    sim.initialize_charges(dt)
+    sim.set_semistatic_init_conds()
+
+    # initialize a copy for later
+    g_copy = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
+    particles_copy = [ptc.copy() for ptc in particles]
+    sim_copy = Simulation(g_copy, particles_copy)
+    sim_copy.initialize_charges(dt)
+    sim_copy.set_semistatic_init_conds()
+
+    # run sim for nsteps, recording the data in my_particles_list, my_E_list, my_B_list
+    my_particles_list = [[ptc.copy() for ptc in particles]]
+    my_E_list = [g.E.copy()]
+    my_B_list = [g.B.copy()]
+    for i in range(nsteps):
+        sim.vay_make_step(dt)
+
+        my_particles_list.append([ptc.copy() for ptc in particles])
+        my_E_list.append(g.E.copy())
+        my_B_list.append(g.B.copy())
+
+    # reproduce the same with sim_copy.run
+    sim_copy.run(nsteps, dt, j, pusher="vay")
+
+    # assert that the hournal has the right number of entries
+    assert len(j.particles_list) == len(j.E_list) == len(j.B_list) == nsteps + 1  # initial step plus nsteps
+
+    # compare journal particle entries with what's expected
+    for (particles1, particles2) in zip(j.particles_list, my_particles_list):
+        # for each time step, iterate through the particles and compare
+        for (ptc1, ptc2) in zip(particles1, particles2):
+            assert ptc1.m == ptc2.m
+            assert ptc1.q == ptc2.q
+            assert np.linalg.norm(ptc1.R - ptc2.R) < 1e-10
+            assert np.linalg.norm(ptc1.v - ptc2.v) < 1e-10
+            assert np.linalg.norm(ptc1.u - ptc2.u) < 1e-10
+
+    # compare journal field entries with what's expected
+    for (E1, E2) in zip(j.E_list, my_E_list):
+        assert np.array_equal(E1, E2)
+    for (B1, B2) in zip(j.B_list, my_B_list):
+        assert np.array_equal(B1, B2)
+
+
 # test that Simulation.vay_make_step maintains charge conservation and Maxwell's equations,
 # thus testing the field part of the entire PIC loop with the Vay pusher
 def intg_test_0():
@@ -1328,3 +1510,40 @@ def soft_test_3():
     plt.plot(xlist)
     plt.plot(ylist)
     plt.show()
+
+
+
+# test that Simulation.run with EverythingJournal woks correctly
+# @test: Simulation.run, EverythingJournal
+def soft_test_4():
+    print('-- soft test 4 --')
+
+    # initialize a journal
+    j = ParticlesOnlyJournal()
+
+    # initialize a grid
+    (N1, N2, N3) = (10, 10, 10)
+    (xsize, ysize, zsize) = (1., 1., 1.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
+
+    # pick a time step
+    dt = 0.2 * g.max_time_step
+
+    # pick the number of time steps
+    nsteps = 100
+
+    # initialize particles
+    nparticles = 20
+    particles = [random_particle((xsize, ysize, zsize)) for _ in range(nparticles)]
+    particles[-1].q = -sum([ptc.q for ptc in particles[:-1]])  # make sure the total charge is zero
+
+    # initialize the simulation
+    sim = Simulation(g, particles)
+    sim.initialize_charges(dt)
+    sim.set_semistatic_init_conds()
+
+    # run
+    sim.run(nsteps, dt, j, pusher="vay")
+
+    # display
+    j.to_gif((xsize, ysize, zsize), 0.3)
