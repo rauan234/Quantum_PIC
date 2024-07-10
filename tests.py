@@ -1,11 +1,14 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import random
+import qiskit
 
 from Simulation import *
 from Grid import *
 from Particle import *
 from FormFactor import *
+from Quantum import *
+from BinaryStrings import *
 
 
 # ------------------------------------------------------------------------------
@@ -950,6 +953,684 @@ def unit_test_25():
         assert np.array_equal(B1, B2)
 
 
+# test Grid shifts and half-shifts
+# @test: Grid.shifp, Grid.shiftm, Grid.half_shiftp, Grid.half_shiftm
+def unit_test_26():
+    print('-- unit test 26 --')
+
+    # initialize a grid
+    (N1, N2, N3) = (3, 4, 5)
+    (xsize, ysize, zsize) = (4., 5., 6.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), EmptyFF)
+
+    # initialize a scalar field on the grid
+    f = np.zeros((N1, N2, N3))
+    for i in range(N1):
+        for j in range(N2):
+            for k in range(N3):
+                f[i, j, k] = (i + 1) % N1 * (j + 2) % N2 * (k + 3) % N3
+
+    # compute the shifts of f and compare with Grid.shiftp
+    f_xp = np.zeros((N1, N2, N3))
+    f_xm = np.zeros((N1, N2, N3))
+    f_yp = np.zeros((N1, N2, N3))
+    f_ym = np.zeros((N1, N2, N3))
+    f_zp = np.zeros((N1, N2, N3))
+    f_zm = np.zeros((N1, N2, N3))
+    for i in range(N1):
+        for j in range(N2):
+            for k in range(N3):
+                f_xp[i, j, k] = (i + 1 + 1) % N1 * (j + 2) % N2 * (k + 3) % N3  # shift x by 1
+                f_xm[i, j, k] = (i - 1 + 1) % N1 * (j + 2) % N2 * (k + 3) % N3  # shift x by -1
+                f_yp[i, j, k] = (i + 1) % N1 * (j + 1 + 2) % N2 * (k + 3) % N3  # shift y by 1
+                f_ym[i, j, k] = (i + 1) % N1 * (j - 1 + 2) % N2 * (k + 3) % N3  # shift y by -1
+                f_zp[i, j, k] = (i + 1) % N1 * (j + 2) % N2 * (k + 1 + 3) % N3  # shift z by 1
+                f_zm[i, j, k] = (i + 1) % N1 * (j + 2) % N2 * (k - 1 + 3) % N3  # shift z by -1
+    assert np.array_equal(f_xp, g.shiftp(0, f))
+    assert np.array_equal(f_xm, g.shiftm(0, f))
+    assert np.array_equal(f_yp, g.shiftp(1, f))
+    assert np.array_equal(f_ym, g.shiftm(1, f))
+    assert np.array_equal(f_zp, g.shiftp(2, f))
+    assert np.array_equal(f_zm, g.shiftm(2, f))
+
+    # compute the half-shifts of f and compare with Grid.shiftp
+    f_xhp = 0.5 * (f + f_xp)
+    f_xhm = 0.5 * (f + f_xm)
+    f_yhp = 0.5 * (f + f_yp)
+    f_yhm = 0.5 * (f + f_ym)
+    f_zhp = 0.5 * (f + f_zp)
+    f_zhm = 0.5 * (f + f_zm)
+    assert np.array_equal(f_xhp, g.half_shiftp(0, f))
+    assert np.array_equal(f_xhm, g.half_shiftm(0, f))
+    assert np.array_equal(f_yhp, g.half_shiftp(1, f))
+    assert np.array_equal(f_yhm, g.half_shiftm(1, f))
+    assert np.array_equal(f_zhp, g.half_shiftp(2, f))
+    assert np.array_equal(f_zhm, g.half_shiftm(2, f))
+
+
+# test Particle computation of velocity and momentum
+# @test: Particle.compute_u, Particle.compute_v
+def unit_test_27():
+    print('-- unit test 27 --')
+
+    m = 123.                       # mass
+    v = np.array([0.4, 0.5, 0.6])  # velocity
+    u = v * 10. / np.sqrt(23.)     # reduced momentum
+
+    # compute reduced momentum from velocity
+    ptc1 = Particle(m, 0., np.zeros(3), v=v)
+    assert np.linalg.norm(ptc1.u - u) < 1e-10
+
+    # compute velocity from reduced momentum
+    ptc1 = Particle(m, 0., np.zeros(3), u=u)
+    assert np.linalg.norm(ptc1.v - v) < 1e-10
+
+
+# test the centered cross product
+# @test: Grid.ccp
+def unit_test_28():
+    print('-- unit test 28 --')
+
+    # initialize a grid
+    (N1, N2, N3) = (10, 20, 30)
+    (xsize, ysize, zsize) = (4., 5., 6.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), EmptyFF)
+
+    # initialize two vector fields
+    A = np.zeros((3, N1, N2, N3))
+    B = np.zeros((3, N1, N2, N3))
+    for i in range(N1):
+        for j in range(N2):
+            for k in range(N3):
+                A[:, i, j, k] = (k, i, j)
+                B[:, i, j, k] = (j**2 + k**2, k**2 + i**2, i**2 + j**2)
+
+    # compute the centered cross product and compare to the result of Grid.ccp
+    ccp = np.zeros((3, N1, N2, N3))
+    for i in range(N1):
+        for j in range(N2):
+            for k in range(N3):
+                ccp[:, i, j, k] = (
+                    (i - j) * 0.5 * (i**2 + ((i+1) % N1)**2) + i * j**2 - j * k**2,
+                    (j - k) * 0.5 * (j**2 + ((j+1) % N2)**2) + j * k**2 - k * i**2,
+                    (k - i) * 0.5 * (k**2 + ((k+1) % N3)**2) + k * i**2 - i * j**2
+                )
+    assert np.max(np.abs(ccp - g.ccp(A, B))) < 1e-10
+
+
+# test the controlled incrementer quantum circuit
+# @test: add_controlled_binary_incrementer
+def unit_test_29():
+    print('-- unit test 29 --')
+
+    n = 6
+    incr_circuit = QuantumCircuit(2 * n - 1)
+    add_controlled_binary_incrementer(incr_circuit, n, range(n - 1, 2 * n - 1), range(n - 2, 0, -1), 0)
+
+    # check action when control qubit is set to 1
+    for i in range(2**n):
+        # the last n qubits are data qubits, then there are n - 2 ancilla qubits, and then the zeroth qubit is control
+        psi = Statevector.from_label(format(i, '0' + str(n) + 'b') + '0' * (n-2) + '1')
+        psi = psi.evolve(incr_circuit)
+
+        # the last n qubits are data qubits, then there are n - 2 ancilla qubits, and then the zeroth qubit is control
+        goal = Statevector.from_label(format((i + 1) % (2**n), '0' + str(n) + 'b') + '0' * (n-2) + '1')
+
+        # check that |i> is mapped to |i+1> when the control qubit is set to 1,
+        # and that the ancilla qubits are returned to 0
+        assert psi == goal
+
+    # check action when control qubit is set to 0
+    for i in range(2**n):
+        # the last n qubits are data qubits, then there are n - 2 ancilla qubits, and then the zeroth qubit is control
+        psi = Statevector.from_label(format(i, '0' + str(n) + 'b') + '0' * (n-2) + '0')
+        psi = psi.evolve(incr_circuit)
+
+        # the last n qubits are data qubits, then there are n - 2 ancilla qubits, and then the zeroth qubit is control
+        goal = Statevector.from_label(format(i, '0' + str(n) + 'b') + '0' * (n-2) + '0')
+
+        # check that |i> is mapped to |i> when the control qubit is set to 1,
+        # and that the ancilla qubits are returned to 0
+        assert psi == goal
+
+
+# test if the finite field F_2 linear solver is working correctly on a specific example
+# @test: f2_linear_solve
+def unit_test_30():
+    print('-- unit test 30 --')
+
+    # A = (1011
+    #      0100
+    #      1010
+    #      0011)
+    A = np.array([13, 2, 5, 12])
+
+    # b = 0101
+    b = 10
+
+    x = f2_linear_solve(4, A, b)
+    assert x == 7  # expect x == 1110
+
+
+# test if the finite field F_2 linear solver is working correctly on a few large randomly generated examples
+# @test: f2_linear_solve
+def unit_test_31():
+    print('-- unit test 31 --')
+
+    n = 3
+    for iteration in range(1000):
+        A_bin = np.random.randint(2, size=(n, n))
+        A = np.array(list(map(binary_to_int, A_bin)))
+        b = random.randint(0, 2**n - 1)
+
+        det = np.linalg.det(A_bin) % 2
+        if det == 0:
+            try:
+                x = f2_linear_solve(n, A, b)
+                raise Exception  # supposed to have rejected singular A
+            except ValueError:
+                # successfully identified A as singular
+                pass
+        else:
+            x = f2_linear_solve(n, A, b)
+
+            # check that A x == b
+            Ax = 0
+            for i in range(n):
+                if binary_string_at(x, i):
+                    col = binary_to_int(np.bitwise_and(np.right_shift(A, i), 1))
+                    Ax = np.bitwise_xor(Ax, col)
+
+            assert Ax == b
+
+
+# test if the function simulating xor/cnot circuit specifications is working correctly on a specific example
+# @test: simulate_xor_seq
+def unit_test_32():
+    print('-- unit test 32 --')
+
+    init_regs = np.array([177, 156, 32, 95])
+    seq = [(1, 2), (3, 0), (0, 1), (1, 2), (2, 3)]
+
+    new_regs = simulate_xor_seq(init_regs, seq)
+
+    # check that new_regs matches the expected result, and that init_regs is not changed by the function
+    assert np.array_equal(new_regs, np.array([238, 114, 206, 145]))
+    assert np.array_equal(init_regs, np.array([177, 156, 32, 95]))
+
+
+# test if the accumulate/skip down/up functions are working correctly on a randomly generated example
+# @test: xor_accumulate_down, xor_accumulate_up, xor_skip_down, xor_skip_up
+def unit_test_33():
+    print('-- unit test 33 --')
+
+    n = 10
+    regs = np.random.randint(2**n, size=n)
+
+    def arr_bitwise_xor(arr):
+        res = 0
+
+        for x in arr:
+            res = np.bitwise_xor(res, x)
+
+        return res
+
+    # test down-accumulation and down-skipping
+    start = 3
+    length = 5
+    acc_down = xor_accumulate_down(start, length)   # generate a sequence of xor/cnot to accumulate down
+    new_regs = simulate_xor_seq(regs, acc_down)     # simulate
+
+    assert new_regs[start + length] == arr_bitwise_xor(regs[start:start+length+1])  # compare with expected result
+    skp_down = xor_skip_down(start, length)         # generate a sequence of xor/cnot to skip down
+    new_regs = simulate_xor_seq(regs, skp_down)     # simulate
+    assert new_regs[start + length] == regs[start]  # compare with expected result
+
+    # test up-accumulation
+    start = 7
+    length = 2
+    acc_up = xor_accumulate_up(start, length)       # generate a sequence of xor/cnot to accumulate up
+    new_regs = simulate_xor_seq(regs, acc_up)       # simulate
+    assert new_regs[start - length] == arr_bitwise_xor(regs[start-length:start+1])  # compare with expected result
+
+    skp_up = xor_skip_up(start, length)             # generate a sequence of xor/cnot to skip up
+    new_regs = simulate_xor_seq(regs, skp_up)       # simulate
+    assert new_regs[start - length] == regs[start]  # compare with expected result
+
+
+# test the function to bring a desired combination fo registers into the lowest one on a specific example
+# @test: xor_combination_to_lower
+def unit_test_34():
+    print('-- unit test 34 --')
+
+    offset = 1  # location of the first register which might be xor-ed
+    length = 4  # total number of registers which might be xor-ed
+
+    # regs = (10000
+    #         01000
+    #         00100
+    #         00010
+    #         00001)
+    regs = np.array([1, 2, 4, 8, 16])
+
+    # b = 1011
+    b = 13
+
+    seq = xor_combination_to_lower(offset, length, b)
+    new_regs = simulate_xor_seq(regs, seq)
+    assert new_regs[offset + length - 1] == 26  # 01011
+
+
+# test the function to bring a desired combination of registers into the lowest one on a few randomly generated examples
+# @test: xor_combination_to_lower
+def unit_test_35():
+    print('-- unit test 35 --')
+
+    n = 20       # total number of registers
+    offset = 3   # location of the first register which might be xor-ed
+    for length in range(1, 13):  # total number of registers which might be xor-ed
+        for iteration in range(1000):
+            regs = np.random.randint(2**n, size=n)       # generate n random register values
+            b_arr = np.random.randint(2, size=length)    # generate a random length-bit binary string
+            b = binary_to_int(b_arr)
+            if b == 0:
+                # cannot make an empty register
+                continue
+
+            # compute the linear combination of registers specified by b
+            expected_result = 0
+            for char, reg in zip(b_arr, regs[offset:offset+length]):
+                expected_result = np.bitwise_xor(expected_result, char * reg)
+
+            # test that xor_combination_to_lower reproduces the expected result
+            seq = xor_combination_to_lower(offset, length, b)
+            new_regs = simulate_xor_seq(regs, seq)
+
+            assert new_regs[offset + length - 1] == expected_result
+
+
+# test the function to bring a desired combination fo registers into the uppermost one on a specific example
+# @test: xor_combination_to_upper
+def unit_test_36():
+    print('-- unit test 36 --')
+
+    offset = 1  # location of the first register which might be xor-ed
+    length = 4  # total number of registers which might be xor-ed
+
+    # regs = (10000
+    #         01000
+    #         00100
+    #         00010
+    #         00001)
+    regs = np.array([1, 2, 4, 8, 16])
+
+    # b = 1011
+    b = 13
+
+    seq = xor_combination_to_upper(offset, length, b)
+    new_regs = simulate_xor_seq(regs, seq)
+    assert new_regs[offset] == 26  # 01011
+
+
+# test the function to bring a desired combination of registers into the uppermost one on a few randomly generated ex.
+# @test: xor_combination_to_upper
+def unit_test_37():
+    print('-- unit test 37 --')
+
+    n = 20  # total number of registers
+    offset = 5  # location of the first register which might be xor-ed
+    for length in range(1, 9):  # total number of registers which might be xor-ed
+        for iteration in range(1000):
+            regs = np.random.randint(2 ** n, size=n)   # generate n random register values
+            b_arr = np.random.randint(2, size=length)  # generate a random length-bit binary string
+            b = binary_to_int(b_arr)
+            if b == 0:
+                # cannot make an empty register
+                continue
+
+            # compute the linear combination of registers specified by b
+            expected_result = 0
+            for char, reg in zip(b_arr, regs[offset:offset + length]):
+                expected_result = np.bitwise_xor(expected_result, char * reg)
+
+            # test that xor_combination_to_lower reproduces the expected result
+            seq = xor_combination_to_upper(offset, length, b)
+            new_regs = simulate_xor_seq(regs, seq)
+
+            assert new_regs[offset] == expected_result
+
+
+# test the function to bring a desired combination of registers into an arbitrary register on a specific example
+# @test: adjacent_xor_sequence
+def unit_test_38():
+    print('-- unit test 38 --')
+
+    # initialize the problem
+    n = 7       # total number of registers
+    offset = 2  # location of the uppermost register which may be xor-ed
+    length = 5  # number of registers which may be xor-ed
+    m = 2       # offset + m is the location of the target register
+    b = binary_to_int(np.array([1, 0, 1, 1, 1]))  # specifies the desired combination of registers
+
+    # check that the function achieves the desired result
+    seq = adjacent_xor_sequence(offset, length, m, b)
+
+    regs = np.array([2**i for i in range(n)])
+    regs_new = simulate_xor_seq(regs, seq)
+
+    assert regs_new[offset + m] == b * 2**offset
+
+
+# test the function to bring a desired combination of registers into an arbitrary register on a few randomly gen. ex.
+# @test: adjacent_xor_sequence
+def unit_test_39():
+    print('-- unit test 39 --')
+
+    n = 10
+    for iteration in range(1000):
+        offset = random.randint(0, 5)
+        for length in range(2, n - offset + 1):
+            b = random.randint(1, 2**length - 1)
+    
+            for m in range(length):
+                # for every possible target register, check that the function achieves the desired result
+                seq = adjacent_xor_sequence(offset, length, m, b)
+
+                regs = np.array([2 ** i for i in range(n)])
+                regs_new = simulate_xor_seq(regs, seq)
+
+                assert regs_new[offset + m] == b * 2 ** offset
+
+
+# test the function to bring a desired bit string into some register on a specific example
+# @test: make_desired_string
+def unit_test_40():
+    print('-- unit test 40 --')
+
+    regs = np.array([13, 2, 5, 12])
+    b = 10
+
+    seq, m = make_desired_sting(regs, b)
+
+    regs_new = simulate_xor_seq(regs, seq)
+    assert regs_new[m] == b
+
+
+# test the function to bring a desired bit string into some register on a few randomly generated examples
+# @test: make_desired_string
+def unit_test_41():
+    print('-- unit test 41 --')
+
+    n = 6
+    for iteration in range(1000):
+        b = random.randint(1, 2**n - 1)
+
+        # generate some scrambled register values
+        regs = np.array([2 ** i for i in range(n)])
+        regs = simulate_xor_seq(regs, random_xor_seq(0, n, 100))
+
+        # check that the function correctly produces b on the register offset + m
+        seq, m = make_desired_sting(regs, b)
+
+        regs_new = simulate_xor_seq(regs, seq)
+        assert regs_new[m] == b
+
+
+# test the greedy algorithm for the string breeding problem for a few small n
+# @test: sbp_solver_greedy
+def unit_test_42():
+    print('-- unit test 42 --')
+
+    for n in range(3, 7):
+        # compute the solution
+        soln = sbp_solve_greedy(n)
+
+        # set goals to be the set of all binary strings of length n and odd weight, except those that have weight 1
+        goals = set()
+        for b in range(2 ** n):
+            w = binary_weight(b)
+            if w % 2 == 1 and w > 1:
+                goals.add(b)
+
+        # initialize the register values
+        regs = np.array([2 ** i for i in range(n)])
+
+        # check that by following the solution, every desired string is attained
+        for move in soln:
+            if len(move) == 2:  # cnot gate from i to j
+                (i, j) = move
+                regs[j] = np.bitwise_xor(regs[i], regs[j])
+            else:  # a rotation specification ('R', goal_visited, register_index)
+                _, b, m = move
+                assert regs[m] == b  # the claimed register value should match its actual value
+                goals.remove(b)
+
+        assert not goals  # no goals should remain unvisited
+
+
+# test the binary Fourier transform (BFT) ansatz on a few randomly generated examples
+# @test: BFTAnsatz
+def unit_test_43():
+    print('-- unit test 43 --')
+
+    # iterate through a range of n to make sure the function works for small as well as large n
+    for n in range(1, 8):
+        # initialize
+        n = 7                                     # number of qubits in the ansatz, including the parity qubit
+        offset = 3                                # index of the parity qubit
+        u = np.random.rand(2**(n-1)) / 2**(n+1)   # specifies the desired quantum state
+
+        # prepare the ansatz
+        ans = BFTAnsatz(n, offset)
+        ans.solve_sbp()
+
+        # compute the action of the ansatz
+        qc = QuantumCircuit(n + offset)
+        ans.make(qc, u)
+        psi = Statevector.from_instruction(qc)
+        psi = psi.evolve(binary_proj_op(n + offset, {offset: 1}))  # project onto the space where the parity qubit is 1
+        data = psi.data
+
+        # check that the ansatz reproduces the expected state
+        for i, val in enumerate(u):
+            ind = 2**offset * (1 + 2 * i)
+            im_unit = 0 + 1j
+            assert abs(data[ind] - im_unit * u[i]) < 1e-10
+
+
+# test if the quantum circuit for computing backward differences is working correctly on a few random examples
+# @test: q_back_diff
+def unit_test_44():
+    print('-- unit test 44 --')
+
+    # iterate through a range of n to check small as well as large n
+    for n in range(8):
+        # initialize some function
+        arr = np.random.rand(2**n) / 2**(n+1)   # specifies the desired quantum state
+
+        # compute the backward difference
+        diff = q_back_diff(arr)
+
+        # compare result with expected result
+        assert np.linalg.norm(diff - (arr - np.roll(arr, 1))) < 1e-10
+
+
+# test if the quantum circuit for computing forward differences is working correctly on a few random examples
+# @test: q_forw_diff
+def unit_test_45():
+    print('-- unit test 45 --')
+
+    # iterate through a range of n to check small as well as large n
+    for n in range(8):
+        # initialize some function
+        arr = np.random.rand(2 ** n) / 2 ** (n + 1)  # specifies the desired quantum state
+
+        # compute the forward difference
+        diff = q_forw_diff(arr)
+
+        # compare result with expected result
+        assert np.linalg.norm(diff - (np.roll(arr, -1) - arr)) < 1e-10
+
+
+# test the quantum discretized differential operators on a simple example,
+# in particular testing if the derivative correctly wraps around
+# @test: Grid.q_pdp, Grid.q_pdm
+def unit_test_46():
+    print('-- unit test 46 --')
+
+    (N1, N2, N3) = (4, 16, 8)
+    (xsize, ysize, zsize) = (2., 3., 7.)
+    (Dx, Dy, Dz) = (xsize / N1, ysize / N2, zsize / N3)
+
+    # initialize an example function
+    f = np.zeros((N1, N2, N3))
+    for i in range(N1):
+        for j in range(N2):
+            for k in range(N3):
+                f[i, j, k] = (i + 3) * (j + 3) * (k + 3)
+
+    # compute the derivatives of f
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), EmptyFF)
+    scale = 999999  # rescale to avoid overflow in quantum state amplitudes, then scale back
+    (f0p, f0m) = (scale * g.q_pdp(0, f / scale), scale * g.q_pdm(0, f / scale))
+    (f1p, f1m) = (scale * g.q_pdp(1, f / scale), scale * g.q_pdm(1, f / scale))
+    (f2p, f2m) = (scale * g.q_pdp(2, f / scale), scale * g.q_pdm(2, f / scale))
+
+    # compare the result with what is expected
+    for i in range(N1):
+        for j in range(N2):
+            for k in range(N3):
+                # test pdp(0, f)
+                expected = -(N1-1) * (j + 3) * (k + 3) / Dx if i == N1 - 1 else (j + 3) * (k + 3) / Dx
+                assert abs(f0p[i, j, k] - expected) < 1e-10
+
+                # test pdm(0, f)
+                expected = -(N1-1) * (j + 3) * (k + 3) / Dx if i == 0 else (j + 3) * (k + 3) / Dx
+                assert abs(f0m[i, j, k] - expected) < 1e-10
+
+                # test pdp(1, f)
+                expected = -(N2-1) * (i + 3) * (k + 3) / Dy if j == N2 - 1 else (i + 3) * (k + 3) / Dy
+                assert abs(f1p[i, j, k] - expected) < 1e-10
+
+                # test pdm(1, f)
+                expected = -(N2-1) * (i + 3) * (k + 3) / Dy if j == 0 else (i + 3) * (k + 3) / Dy
+                assert abs(f1m[i, j, k] - expected) < 1e-10
+
+                # test pdp(2, f)
+                expected = -(N3-1) * (i + 3) * (j + 3) / Dz if k == N3 - 1 else (i + 3) * (j + 3) / Dz
+                assert abs(f2p[i, j, k] - expected) < 1e-10
+
+                # test pdm(2, f)
+                expected = -(N3-1) * (i + 3) * (j + 3) / Dz if k == 0 else (i + 3) * (j + 3) / Dz
+                assert abs(f2m[i, j, k] - expected) < 1e-10
+
+
+# test if the quantum discretized differential operators relate to each other correctly, part 1: scalar fields
+# @test: Grid.q_gradp, Grid.q_gradm, Grid.q_divp, Grid.q_divm, Grid.q_curlp, Grid.q_curlm, Grid.q_lapl
+def unit_test_47():
+    print('-- unit test 47 --')
+
+    # initialize the grid with some parameters
+    (N1, N2, N3) = (8, 4, 16)
+    (xsize, ysize, zsize) = (2., 3., 7.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), EmptyFF)
+
+    # initialize some random scalar field
+    f = -1. + 2. * np.random.rand(N1, N2, N3)
+    scale = 10**6
+    f /= scale  # rescale to avoid overflow in quantum state amplitudes
+
+    # check that the derivatives all commute with one another
+    for i in range(3):
+        for j in range(3):
+            assert np.max(np.abs(
+                g.q_pdp(i, g.q_pdp(j, f)) - g.q_pdp(j, g.q_pdp(i, f))
+            )) < 1e-10
+            assert np.max(np.abs(
+                g.q_pdp(i, g.q_pdm(j, f)) - g.q_pdm(j, g.q_pdp(i, f))
+            )) < 1e-10
+            assert np.max(np.abs(
+                g.q_pdm(i, g.q_pdm(j, f)) - g.q_pdm(j, g.q_pdm(i, f))
+            )) < 1e-10
+
+    # check that the gradient is the vector of derivatives
+    assert np.max(np.abs(
+        g.q_gradp(f) - np.array([g.q_pdp(0, f), g.q_pdp(1, f), g.q_pdp(2, f)])
+    )) < 1e-10
+    assert np.max(np.abs(
+        g.q_gradm(f) - np.array([g.q_pdm(0, f), g.q_pdm(1, f), g.q_pdm(2, f)])
+    )) < 1e-10
+
+    # check that the curl of a gradient is zero
+    assert np.max(np.abs(
+        g.q_curlp(g.q_gradp(f))
+    )) < 1e-10
+    assert np.max(np.abs(
+        g.q_curlm(g.q_gradm(f))
+    )) < 1e-10
+
+    # check that the Laplacian is the divergence of the gradient
+    assert np.max(np.abs(
+        g.q_lapl(f) - g.q_divp(g.q_gradm(f))
+    )) < 1e-10
+    assert np.max(np.abs(
+        g.q_lapl(f) - g.q_divm(g.q_gradp(f))
+    )) < 1e-10
+
+
+# test if the quantum discretized differential operators relate to each other correctly, part 2: vector fields
+# @test: Grid.q_divp, Grid.q_divm, Grid.q_curlp, Grid.q_curlm
+def unit_test_48():
+    print('-- unit test 48 --')
+
+    # initialize the grid with some parameters
+    (N1, N2, N3) = (4, 8, 4)
+    (xsize, ysize, zsize) = (2., 3., 7.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), EmptyFF)
+
+    # initialize some random vector field
+    v = -1. + 2. * np.random.rand(3, N1, N2, N3)
+    scale = 10**6
+    v /= scale  # rescale to avoid overflow in quantum state amplitudes
+
+    # check that the divergence of a curl is zero
+    assert np.max(np.abs(g.q_divp(g.q_curlp(v)))) < 1e-10
+    assert np.max(np.abs(g.q_divm(g.q_curlm(v)))) < 1e-10
+
+
+# test if for a constant function, all quantum differential operators are zero
+# @test: Grid.q_gradp, Grid.q_gradm, Grid.q_divp, Grid.q_divm, Grid.q_curlp, Grid.q_curlm, Grid.q_lapl
+def unit_test_49():
+    print('-- unit test 49 --')
+
+    # initialize the grid with some parameters
+    (N1, N2, N3) = (4, 4, 8)
+    (xsize, ysize, zsize) = (2., 3., 7.)
+    g = Grid((N1, N2, N3), (xsize, ysize, zsize), EmptyFF)
+
+    # initialize constant scalar and vector fields
+    f = np.zeros((N1, N2, N3))
+    v = np.zeros((3, N1, N2, N3))
+    f += -1. + 2. * np.random.rand(1)
+    v += -1. + 2. * np.random.rand(1)
+    scale = 10**6
+    f /= scale  # rescale to avoid overflow in quantum state amplitudes
+    v /= scale
+
+    # derivative operators
+    for i in range(3):
+        assert np.max(np.abs(g.q_pdp(i, f))) < 1e-10
+        assert np.max(np.abs(g.q_pdm(i, f))) < 1e-10
+
+    # scalar field vector operators
+    for func in (g.q_gradp, g.q_gradm, g.q_lapl):
+        assert np.max(np.abs(func(f))) < 1e-10
+
+    # vector field vector operators
+    for func in (g.q_divp, g.q_divm, g.q_curlp, g.q_curlm):
+        assert np.max(np.abs(func(v))) < 1e-10
+
+
 # test that Simulation.vay_make_step maintains charge conservation and Maxwell's equations,
 # thus testing the field part of the entire PIC loop with the Vay pusher
 def intg_test_0():
@@ -1510,7 +2191,6 @@ def soft_test_3():
     plt.plot(xlist)
     plt.plot(ylist)
     plt.show()
-
 
 
 # test that Simulation.run with EverythingJournal woks correctly

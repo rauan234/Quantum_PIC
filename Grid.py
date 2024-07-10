@@ -2,12 +2,18 @@ import numpy as np
 import random
 
 from FormFactor import FormFactor
+from Quantum import q_back_diff, q_forw_diff
+
+
+def is_power_of_2(n):
+    return (n & (n - 1) == 0) and n != 0
 
 # ----------------------------------------------------------------------
 #               WRAPAROUND ARRAY FUNCTIONS
 # ----------------------------------------------------------------------
 # The two functions wraparound_array_add and wraparound_array_dot are
 # helper functions for working with torus arrays.
+
 
 # helper function to be called ONLY from wraparound_array_add
 def waa_helper(A, B, ind, k):
@@ -218,6 +224,54 @@ class Grid:
         assert isinstance(f, np.ndarray) and f.shape == self.mesh_size
         return self.k0[i] * (f - np.roll(f, 1, axis=i))
 
+    # forward difference computed using a quantum circuit
+    def q_pdp(self, i, f):
+        assert isinstance(f, np.ndarray) and f.shape == self.mesh_size
+        assert all(map(is_power_of_2, self.mesh_size))  # the grid dimensions must all be powers of 2
+
+        if i == 0:
+            result = np.zeros(self.mesh_size)
+            for y in range(self.mesh_size[1]):
+                for z in range(self.mesh_size[2]):
+                    result[:, y, z] = self.k0[i] * q_forw_diff(f[:, y, z])
+            return result
+        elif i == 1:
+            result = np.zeros(self.mesh_size)
+            for z in range(self.mesh_size[2]):
+                for x in range(self.mesh_size[0]):
+                    result[x, :, z] = self.k0[i] * q_forw_diff(f[x, :, z])
+            return result
+        elif i == 2:
+            result = np.zeros(self.mesh_size)
+            for x in range(self.mesh_size[0]):
+                for y in range(self.mesh_size[1]):
+                    result[x, y, :] = self.k0[i] * q_forw_diff(f[x, y, :])
+            return result
+
+    # backward difference computed using a quantum circuit
+    def q_pdm(self, i, f):
+        assert isinstance(f, np.ndarray) and f.shape == self.mesh_size
+        assert all(map(is_power_of_2, self.mesh_size))  # the grid dimensions must all be powers of 2
+
+        if i == 0:
+            result = np.zeros(self.mesh_size)
+            for y in range(self.mesh_size[1]):
+                for z in range(self.mesh_size[2]):
+                    result[:, y, z] = self.k0[i] * q_back_diff(f[:, y, z])
+            return result
+        elif i == 1:
+            result = np.zeros(self.mesh_size)
+            for z in range(self.mesh_size[2]):
+                for x in range(self.mesh_size[0]):
+                    result[x, :, z] = self.k0[i] * q_back_diff(f[x, :, z])
+            return result
+        elif i == 2:
+            result = np.zeros(self.mesh_size)
+            for x in range(self.mesh_size[0]):
+                for y in range(self.mesh_size[1]):
+                    result[x, y, :] = self.k0[i] * q_back_diff(f[x, y, :])
+            return result
+
     # gradient with forward differences
     def gradp(self, f):
         assert isinstance(f, np.ndarray) and f.shape == self.mesh_size
@@ -236,6 +290,28 @@ class Grid:
             self.pdm(2, f)
         ])
 
+    # gradient with forward differences computed using a quantum circuit
+    def q_gradp(self, f):
+        assert isinstance(f, np.ndarray) and f.shape == self.mesh_size
+        assert all(map(is_power_of_2, self.mesh_size))  # the grid dimensions must all be powers of 2
+
+        return np.array([
+            self.q_pdp(0, f),
+            self.q_pdp(1, f),
+            self.q_pdp(2, f)
+        ])
+
+    # gradient with backward differences computed using a quantum circuit
+    def q_gradm(self, f):
+        assert isinstance(f, np.ndarray) and f.shape == self.mesh_size
+        assert all(map(is_power_of_2, self.mesh_size))  # the grid dimensions must all be powers of 2
+
+        return np.array([
+            self.q_pdm(0, f),
+            self.q_pdm(1, f),
+            self.q_pdm(2, f)
+        ])
+
     # divergence with forward differences
     def divp(self, v):
         assert isinstance(v, np.ndarray) and v.shape == (3,) + self.mesh_size
@@ -245,6 +321,20 @@ class Grid:
     def divm(self, v):
         assert isinstance(v, np.ndarray) and v.shape == (3,) + self.mesh_size
         return self.pdm(0, v[0]) + self.pdm(1, v[1]) + self.pdm(2, v[2])
+
+    # divergence with forward differences computed using a quantum circuit
+    def q_divp(self, v):
+        assert isinstance(v, np.ndarray) and v.shape == (3,) + self.mesh_size
+        assert all(map(is_power_of_2, self.mesh_size))  # the grid dimensions must all be powers of 2
+
+        return self.q_pdp(0, v[0]) + self.q_pdp(1, v[1]) + self.q_pdp(2, v[2])
+
+    # divergence with backward differences computed using a quantum circuit
+    def q_divm(self, v):
+        assert isinstance(v, np.ndarray) and v.shape == (3,) + self.mesh_size
+        assert all(map(is_power_of_2, self.mesh_size))  # the grid dimensions must all be powers of 2
+
+        return self.q_pdm(0, v[0]) + self.q_pdm(1, v[1]) + self.q_pdm(2, v[2])
 
     # curl with forward differences
     def curlp(self, v):
@@ -264,6 +354,26 @@ class Grid:
             self.pdm(0, v[1]) - self.pdm(1, v[0])
         ])
 
+    # curl with forward differences computed using a quantum circuit
+    def q_curlp(self, v):
+        assert isinstance(v, np.ndarray) and v.shape == (3,) + self.mesh_size
+        assert all(map(is_power_of_2, self.mesh_size))  # the grid dimensions must all be powers of 2
+        return np.array([
+            self.q_pdp(1, v[2]) - self.q_pdp(2, v[1]),
+            self.q_pdp(2, v[0]) - self.q_pdp(0, v[2]),
+            self.q_pdp(0, v[1]) - self.q_pdp(1, v[0])
+        ])
+
+    # curl with backward differences computed using a quantum circuit
+    def q_curlm(self, v):
+        assert isinstance(v, np.ndarray) and v.shape == (3,) + self.mesh_size
+        assert all(map(is_power_of_2, self.mesh_size))  # the grid dimensions must all be powers of 2
+        return np.array([
+            self.q_pdm(1, v[2]) - self.q_pdm(2, v[1]),
+            self.q_pdm(2, v[0]) - self.q_pdm(0, v[2]),
+            self.q_pdm(0, v[1]) - self.q_pdm(1, v[0])
+        ])
+
     # laplacian (centered)
     def lapl(self, phi):
         assert isinstance(phi, np.ndarray) and phi.shape == self.mesh_size
@@ -278,6 +388,11 @@ class Grid:
                                    - 2 * phi
                                    + np.roll(phi, -1, axis=2))
         return lapl
+
+    # laplacian (centered) computed using a quantum circuit
+    def q_lapl(self, phi):
+        assert all(map(is_power_of_2, self.mesh_size))  # the grid dimensions must all be powers of 2
+        return self.q_divp(self.q_gradm(phi))
 
     # TODO: replace np.fftn with np.rfftn (real Fourier transform), which is slightly faster
     # output f such that self.lapl(f) == source, and also the sum of f over all grid points is zero
@@ -397,6 +512,16 @@ class Grid:
 
         self.E += dt * (self.curlp(self.B) - self.J)
         self.B += dt * (-self.curlm(self.E))
+
+        self.EcBc_initialized = False  # now that E and B have changed, Ec and Bc have to be recomputed
+
+    # evolve the electric and magnetic field by one time step with differentiation done using a quantum circuit
+    def q_evolve_fields(self, dt):
+        assert 0 < dt <= self.max_time_step
+
+        scale = 999.
+        self.E += dt * (scale * self.q_curlp(self.B / scale) - self.J)
+        self.B += dt * (-scale * self.q_curlm(self.E / scale))
 
         self.EcBc_initialized = False  # now that E and B have changed, Ec and Bc have to be recomputed
 

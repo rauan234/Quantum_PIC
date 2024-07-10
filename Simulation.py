@@ -272,6 +272,65 @@ class Simulation:
         # ptc.R     1
         # ptc.v     1
 
+    # do one interation of the PIC loop with the Vay pusher, using quantum circuits
+    def q_vay_make_step(self, dt):
+        assert self.rho_J_initialized and self.E_B_initialized
+
+        # currently:
+        # quantity  time
+        # g.rho     0
+        # g.J       -1
+        # g.E       0
+        # g.B       0
+        # ptc.R     0
+        # ptc.v     0
+
+        # change the particles' momentum and position, recording their previous position in qR0R1list
+        qR0R1list = []
+        for ptc in self.particles:
+            # interpolate E and B
+            (E, B) = self.grid.get_EB_at(ptc.R)
+
+            # IMPORTANT: first update velocity, then use this updated velocity to modify position
+            # making ptc = (q, R_{t+1}, v_{t+1}),
+            # where (IMPORTANT) R_{t+1} = R_t + dt * v_{t+1}, otherwise cannot guarantee charge conservation
+            R0 = ptc.R.copy()
+            ptc.vay_push(dt, E, B)
+            qR0R1list.append((ptc.q, R0, ptc.R))
+        # currently:
+        # quantity  time
+        # g.rho     0
+        # g.J       -1
+        # g.E       0
+        # g.B       0
+        # ptc.R     1
+        # ptc.v     1
+
+        # update the charge and current densities
+        self.grid.refresh_charge()
+        for (q, R0, R1) in qR0R1list:
+            self.grid.deposit_charge(q, R0, R1, dt)
+        # currently:
+        # quantity  time
+        # g.rho     1
+        # g.J       0
+        # g.E       0
+        # g.B       0
+        # ptc.R     1
+        # ptc.v     1
+
+        # evolve the electric and magnetic fields
+        self.grid.q_evolve_fields(dt)
+        self.grid.compute_EB_centered()
+        # currently:
+        # quantity  time
+        # g.rho     1
+        # g.J       0
+        # g.E       1
+        # g.B       1
+        # ptc.R     1
+        # ptc.v     1
+
     # do one interation of the PIC loop with the xc pusher, described in the writeup
     def xc_make_step(self, dt):
         assert self.rho_J_initialized and self.E_B_initialized

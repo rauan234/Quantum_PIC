@@ -121,13 +121,13 @@ def multiple_dots_example():
 
 def particle_animation():
     # Define the number of frames for the animation
-    num_frames = 750
+    num_frames = 75
 
-    frame_rate = 100  # Frames per second
+    frame_rate = 10  # Frames per second
     interval = 1000 // frame_rate
 
     # initialize a grid
-    (N1, N2, N3) = (40, 40, 40)
+    (N1, N2, N3) = (16, 16, 16)
     (xsize, ysize, zsize) = (1., 1., 1.)
     (Dx, Dy, Dz) = (xsize / N1, ysize / N2, zsize / N3)
     g = Grid((N1, N2, N3), (xsize, ysize, zsize), QuadraticSplineFF)
@@ -183,7 +183,7 @@ def particle_animation():
     print('Simulating')
     for i in range(num_frames - 1):
         print(i)
-        sim.vay_make_step(dt)
+        sim.q_vay_make_step(dt)
         pos_list.append([ptc.R.copy() for ptc in particles])
         field_energy_list.append(get_field_energy_array())
 
@@ -245,11 +245,11 @@ def particle_animation():
 def main():
     #particle_animation()
 
-    np.set_printoptions(suppress=True, precision=2)
+    #np.set_printoptions(suppress=True, precision=2)
     np.random.seed(0)
     random.seed(0)
 
-    unit_test_0()
+    '''unit_test_0()
     unit_test_1()
     unit_test_2()
     unit_test_3()
@@ -275,6 +275,30 @@ def main():
     unit_test_23()
     unit_test_24()
     unit_test_25()
+    unit_test_26()
+    unit_test_27()
+    unit_test_28()'''
+    unit_test_29()
+    unit_test_30()
+    unit_test_31()
+    unit_test_32()
+    unit_test_33()
+    unit_test_34()
+    unit_test_35()
+    unit_test_36()
+    unit_test_37()
+    unit_test_38()
+    unit_test_39()
+    unit_test_40()
+    unit_test_41()
+    unit_test_42()
+    unit_test_43()
+    unit_test_44()
+    unit_test_45()
+    unit_test_46()
+    #unit_test_47()
+    unit_test_48()
+    unit_test_49()
 
     #intg_test_0()
     #intg_test_1()
@@ -289,9 +313,9 @@ def main():
     #soft_test_1()
     #soft_test_2()
     #soft_test_3()
-    soft_test_4()
+    #soft_test_4()
 
-    input('Press ENTER to complete')
+    #input('Press ENTER to complete')
 
 
 if __name__ == '__main__':
